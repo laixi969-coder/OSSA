@@ -1,0 +1,9 @@
+.finesse/
+data/store.json
+data/*.json
+.env
+.env.*
+vendor/60s/node_modules/
+**/node_modules/
+*.log
+.DS_Store
