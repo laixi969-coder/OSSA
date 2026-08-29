@@ -18,5 +18,25 @@
     "scope": "app",
     "nav": "N3",
     "brief": "OSSA workbench restyle + 考古 map/diagram evidence chain"
+  },
+  {
+    "date": "2026-08-29",
+    "macrostructure": "Workbench",
+    "theme": "Newsprint",
+    "theme_axes": "light / roman-serif / cool",
+    "enrichment": "none",
+    "scope": "app",
+    "nav": "N3",
+    "brief": "事件地图从「连线罗列」重做：六种证据材质 + 传播链 + 证据链面板；版面行内时间等比；inLinks 按时间连上游；接上便签接口；行底日期刻度代替假全局轴；缺口占位；窄屏清单降级；全局 toast 状态、loading 旋钮、字段红边"
+  },
+  {
+    "date": "2026-08-29",
+    "macrostructure": "Workbench",
+    "theme": "Newsprint",
+    "theme_axes": "light / roman-serif / cool",
+    "enrichment": "none",
+    "scope": "app",
+    "nav": "N3",
+    "brief": "事件地图版面 v2：整墙重排（pinned 卡避让 + sweep 兜底保证零重叠）；placeRow 改成「最小间距铺满 + 余量按时间间隔分配」，首左末右、永不超出；标题收口 splitTitleSource 同时拿干净标题和尾巴上的来源（BBC/VOA/FT 这类 &nbsp; 分隔也能剥干净）"
   }
 ]

@@ -32,7 +32,7 @@ import {
   type TopicIdea,
 } from "./topic";
 import { clampFieldWant, mixFields, skipAsHomeHot, type FieldOrigin } from "./pool";
-import { hitMatchesQuery, queryKey, runDig, type Dig, type RawHit } from "./dig";
+import { hitMatchesQuery, layoutCards, queryKey, runDig, wallBounds, type Dig, type RawHit } from "./dig";
 
 const ROOT = join(import.meta.dir, "..");
 const PUBLIC = join(import.meta.dir, "public");
@@ -962,6 +962,43 @@ async function handleAuth(req: Request, url: URL, ip: string) {
   return json({ error: "unknown" }, 404);
 }
 
+/**
+ * 旧版 layoutCards 排的 dig 存进 store 后会留下乱坐标；GET 时不重排就直接渲染，
+ * 用户看到的还是叠的。这里无脑重排 + 重算 bounds，pinned 卡原位不动，其余绕开。
+ * 修过一次就稳定（对同一组卡 layoutCards 是确定性的）。
+ * 返回 true 表示动了 store，需要写回。
+ */
+function repairLayoutIfBroken(dig: Dig): boolean {
+  const before = JSON.stringify(dig.cards.map((c) => [c.id, c.x, c.y]));
+  layoutCards(dig.cards);
+  dig.bounds = wallBounds(dig.cards);
+  const after = JSON.stringify(dig.cards.map((c) => [c.id, c.x, c.y]));
+  return before !== after;
+}
+
+/** 启动时扫一遍所有 workspace 的 dig，把历史坏数据一次性修好。 */
+async function repairAllWorkspaces() {
+  const { readdir, readFile, writeFile } = await import("node:fs/promises");
+  const dir = join(ROOT, "data", "workspaces");
+  try {
+    const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
+    let n = 0;
+    for (const f of files) {
+      const p = join(dir, f);
+      const store = JSON.parse(await readFile(p, "utf-8")) as Store;
+      if (!Array.isArray(store.digs)) continue;
+      let dirty = false;
+      for (const dig of store.digs) {
+        if (repairLayoutIfBroken(dig)) { dirty = true; n += 1; }
+      }
+      if (dirty) await writeFile(p, JSON.stringify(store, null, 2));
+    }
+    if (n) console.log(`[startup] 自愈了 ${n} 个 dig 的版面（历史坐标）`);
+  } catch {
+    // 数据目录可能还没建（首次启动），忽略
+  }
+}
+
 Bun.serve({
   port: PORT,
   hostname: "127.0.0.1",
@@ -1281,6 +1318,7 @@ Sitemap: ${origin}/sitemap.xml
         const q = url.searchParams.get("q") || "";
         const key = queryKey(q);
         const dig = key ? store.digs.find((d) => d.queryKey === key) : store.digs[0] || null;
+        if (dig && repairLayoutIfBroken(dig)) await writeStore(store);
         return json({ dig: dig || null });
       }
 
@@ -1299,13 +1337,17 @@ Sitemap: ${origin}/sitemap.xml
 
       if (path === "/api/dig/layout" && req.method === "POST") {
         const store = await readStore();
-        const body = (await req.json()) as { id?: string; cards?: Array<{ id: string; x: number; y: number }> };
+        const body = (await req.json()) as {
+          id?: string;
+          cards?: Array<{ id: string; x: number; y: number; pinned?: boolean }>;
+        };
         const dig = store.digs.find((d) => d.id === body.id);
         if (!dig) return json({ ok: false, error: "找不到这场地图" }, 404);
         const pos = new Map((body.cards || []).map((c) => [c.id, c]));
         dig.cards = dig.cards.map((c) => {
           const next = pos.get(c.id);
-          return next ? { ...c, x: next.x, y: next.y } : c;
+          // 只有被拖过的那张钉住；其余在这一轮里保持可重排。
+          return next ? { ...c, x: next.x, y: next.y, pinned: next.pinned === true } : c;
         });
         await writeStore(store);
         return json({ ok: true });
@@ -1750,3 +1792,4 @@ Sitemap: ${origin}/sitemap.xml
 }
 
 console.log(`OSSA Media OS  http://127.0.0.1:${PORT}`);
+repairAllWorkspaces();

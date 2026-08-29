@@ -19,6 +19,8 @@ export type EvidenceCard = {
   lastSeenAt: string;
   isNew?: boolean;
   stale?: boolean;
+  /** 用户手拖过位置。整墙重排时钉住不动，其余卡绕开它。 */
+  pinned?: boolean;
 };
 
 export type EvidenceLink = {
@@ -45,6 +47,8 @@ export type Dig = {
   links: EvidenceLink[];
   error: string;
   gaps: string[];
+  /** 画布世界尺寸，前端按它撑开世界，不再写死 2400×1400。 */
+  bounds?: { w: number; h: number };
 };
 
 export type RawHit = {
@@ -56,14 +60,42 @@ export type RawHit = {
   imageUrl?: string;
 };
 
-const KIND_Y: Record<CardKind, number> = {
-  news: 88,
-  post: 292,
-  meme: 496,
-  image: 496,
-  derivative: 700,
-  note: 904,
+// 卡片宽度按种类；泳道高度按道（meme 和 image 同道）。
+// 前端渲染用同一组数（app/public/app.js · CARD_METRICS），改一处要改两边。
+const LANE: Record<CardKind, { w: number }> = {
+  news: { w: 268 },
+  post: { w: 236 },
+  meme: { w: 200 },
+  image: { w: 200 },
+  derivative: { w: 200 },
+  note: { w: 180 },
 };
+const LANE_OF: Record<CardKind, string> = {
+  news: "news",
+  post: "post",
+  meme: "visual",
+  image: "visual",
+  derivative: "derivative",
+  note: "note",
+};
+// 高度取自实测：文字行数被 CSS 截断后卡片就这么高，改了截断规则要跟着改。
+const LANE_GEO: Record<string, { h: number }> = {
+  news: { h: 250 },
+  post: { h: 220 },
+  visual: { h: 258 },
+  derivative: { h: 226 },
+  note: { h: 190 },
+};
+const LANE_ORDER = ["news", "post", "visual", "derivative", "note"];
+const WALL_X0 = 88;
+const WALL_SPAN = 2400;
+const COL_GAP = 28;
+const ROW_GAP = 20;
+const LANE_PAD = 44;
+
+function timeOf(c: EvidenceCard): number {
+  return Date.parse(c.publishedAt) || Date.parse(c.firstSeenAt) || 0;
+}
 
 export function normalizeQuery(raw: string): string {
   return String(raw || "").replace(/\s+/g, " ").trim();
@@ -101,34 +133,58 @@ export function cardIdFromUrl(url: string): string {
   return `ev:${(h >>> 0).toString(16)}`;
 }
 
+/** 只解实体。U+00A0 保留不动——「&nbsp;&nbsp;BBC」这种尾巴要靠它才认得出。 */
+function decodeEntities(text: string): string {
+  let t = String(text || "");
+  // 双重 / 三重编码保护：反复解到干净（少数 RSS 会出现 &amp;amp; 这种）。
+  for (let i = 0; i < 3 && /&[#\w]+;/.test(t); i++) {
+    t = t
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/&nbsp;/g, "\u00A0")
+      .replace(/&#160;/g, "\u00A0")
+      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+      .replace(/&amp;/g, "&")
+      .replace(/<[^>]+>/g, " ");
+  }
+  return t.replace(/[ \t\r\n\f\v]+/g, " ").trim();
+}
+
+/** 收干空白：U+00A0 一并归成普通空格，不留不换行空格给排版添乱。 */
+function flatten(t: string): string {
+  return t.replace(/[\s\u00A0]+/g, " ").trim();
+}
+
+/** 解码 + 剥掉尾巴上的来源名。界面上要显示的文本都走这个。 */
 export function unescapeXml(text: string): string {
-  return String(text || "")
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return flatten(stripSourceTail(decodeEntities(text)));
+}
+
+/**
+ * 一次拿到「干净的标题」和「尾巴上的来源名」。
+ * 顺序要紧：来源名必须在剥尾巴之前取，剥完就取不到了。
+ */
+export function splitTitleSource(raw: string): { title: string; source: string } {
+  const decoded = decodeEntities(raw);
+  return { title: flatten(stripSourceTail(decoded)), source: titleSource(decoded) };
 }
 
 export function parseRssItems(xml: string): RawHit[] {
   const blocks = String(xml || "").match(/<item\b[\s\S]*?<\/item>/gi) || [];
   const out: RawHit[] = [];
   for (const block of blocks) {
-    const title = unescapeXml(pickTag(block, "title"));
+    const ts = splitTitleSource(pickTag(block, "title"));
     const url = unescapeXml(pickTag(block, "link") || pickTag(block, "guid"));
-    if (!title || !url || !/^https?:\/\//i.test(url)) continue;
+    if (!ts.title || !url || !/^https?:\/\//i.test(url)) continue;
     const publishedAt = parseTime(pickTag(block, "pubDate") || pickTag(block, "dc:date"));
-    const sourceName =
-      unescapeXml(pickTag(block, "source")) ||
-      titleSource(title) ||
-      hostName(url);
+    const sourceName = unescapeXml(pickTag(block, "source")) || ts.source || hostName(url);
     const summary = unescapeXml(pickTag(block, "description")).slice(0, 180);
     const imageUrl = mediaUrl(block);
-    out.push({ title: stripSourceSuffix(title), url, publishedAt, sourceName, summary, imageUrl });
+    out.push({ title: ts.title, url, publishedAt, sourceName, summary, imageUrl });
   }
   return out;
 }
@@ -145,13 +201,30 @@ function mediaUrl(block: string): string {
   return m?.[1] || "";
 }
 
+/** 空白 = 普通空白、U+00A0，以及还没解码的 &nbsp; / &#160; 字面量。 */
+const WS = "(?:\\s|&nbsp;|&#160;)";
+/** 尾巴上的来源名：两个以上空白 + 2–20 字的短词。BBC / VOA / FT 这类只靠空白隔，没有分隔符。 */
+const TITLE_TAIL_RE = new RegExp(`${WS}{2,}([\\w·&.\\u4e00-\\u9fff]{2,20})\\s*$`, "i");
+
 function titleSource(title: string): string {
-  const m = title.match(/\s[-–—|]\s*([^-–—|]{2,24})$/);
+  // "标题 - 观察者网" / "标题 | 凤凰网" / "标题&nbsp;&nbsp;BBC"
+  const m = title.match(/\s[-–—|]\s*([^-–—|]{2,24})$/) || title.match(TITLE_TAIL_RE);
   return m ? m[1].trim() : "";
 }
 
-function stripSourceSuffix(title: string): string {
-  return title.replace(/\s*[-–—|]\s*[^-–—|]{2,24}$/, "").replace(/[-–—]\s*$/, "").trim() || title;
+/**
+ * 剥掉标题尾巴上的来源名。
+ * 两类写法：带分隔符的「- 观察者网 / | 凤凰网」，和只靠空白隔开的「&nbsp;&nbsp;BBC」。
+ */
+export function stripSourceTail(title: string): string {
+  const t = String(title || "");
+  return (
+    t
+      .replace(/\s*[-–—|]\s*[^-–—|]{2,24}\s*$/, "")
+      .replace(TITLE_TAIL_RE, "")
+      .replace(/[-–—]\s*$/, "")
+      .trim() || t.trim()
+  );
 }
 
 function hostName(url: string): string {
@@ -208,17 +281,21 @@ export function hitsToCards(hits: RawHit[], query: string, now = new Date().toIS
     const id = cardIdFromUrl(url);
     if (used.has(id)) continue;
     used.add(id);
+    // 所有入口（RSS / Google News / Bing / 社交）的标题都在这里过一遍：
+    // 先剥尾巴上的来源名，再定来源、关键词。来源名丢了就用域名兜底。
+    const ts = splitTitleSource(hit.title);
+    const title = ts.title.slice(0, 80);
     cards.push({
       id,
-      kind: classifyKind(hit),
-      title: hit.title.slice(0, 80),
+      kind: classifyKind({ ...hit, title }),
+      title,
       url,
-      sourceName: hit.sourceName || hostName(url) || "公开网页",
+      sourceName: hit.sourceName || ts.source || hostName(url) || "公开网页",
       publishedAt: hit.publishedAt || "",
-      summary: (hit.summary || hit.title).slice(0, 160),
-      keywords: keywordsOf(hit.title, query),
+      summary: stripSourceTail(hit.summary || hit.title).slice(0, 160),
+      keywords: keywordsOf(title, query),
       imageUrl: hit.imageUrl || "",
-      stance: classifyStance(hit),
+      stance: classifyStance({ ...hit, title }),
       x: 0,
       y: 0,
       firstSeenAt: now,
@@ -229,52 +306,212 @@ export function hitsToCards(hits: RawHit[], query: string, now = new Date().toIS
   return cards;
 }
 
+/**
+ * 版面：横着是时间，竖着分道。
+ * 一道一行放不下就换行；每一行内部按该行的时间跨度等比铺开，
+ * 行底另有一条日期刻度说明这一行的真实起止。
+ *
+ * 关键：整墙重排，不是只排新卡。用户拖过的卡（pinned）留在原地，
+ * 其余全部重排；最后 sweep 一遍，任何两块相交就整体下推，保证零重叠。
+ */
 export function layoutCards(cards: EvidenceCard[]): EvidenceCard[] {
-  const dated = cards
-    .map((c, i) => ({ i, t: Date.parse(c.publishedAt) || Date.parse(c.firstSeenAt) || i }))
-    .sort((a, b) => a.t - b.t);
-  const times = dated.map((d) => d.t);
-  const minT = times[0] || Date.now();
-  const maxT = times[times.length - 1] || minT;
-  const span = Math.max(maxT - minT, 36 * 3600 * 1000);
-  const kindIndex: Record<string, number> = {};
-  return cards.map((card) => {
-    if (card.x || card.y) return card;
-    const t = Date.parse(card.publishedAt) || Date.parse(card.firstSeenAt) || minT;
-    const idx = kindIndex[card.kind] || 0;
-    kindIndex[card.kind] = idx + 1;
-    return {
-      ...card,
-      x: Math.round(72 + ((t - minT) / span) * 1880 + (idx % 3) * 18),
-      y: KIND_Y[card.kind] + Math.floor(idx / 8) * 168 + (idx % 2) * 12,
-    };
-  });
+  const widthOf = (c: EvidenceCard) => (LANE[c.kind] || LANE.news).w;
+  const pinned = cards.filter((c) => c.pinned && (c.x || c.y));
+  const free = cards.filter((c) => !(c.pinned && (c.x || c.y))).sort((a, b) => timeOf(a) - timeOf(b));
+
+  // 1) 按道分组，道内按时间切行
+  const lanes = new Map<string, EvidenceCard[]>();
+  for (const card of free) {
+    const lane = LANE_OF[card.kind] || "news";
+    const list = lanes.get(lane) || [];
+    list.push(card);
+    lanes.set(lane, list);
+  }
+
+  const blocks: EvidenceCard[][] = pinned.map((c) => [c]);
+  let y = 96;
+  for (const lane of LANE_ORDER) {
+    const list = lanes.get(lane);
+    if (!list || !list.length) continue;
+    const step = (LANE_GEO[lane] || LANE_GEO.news).h + ROW_GAP;
+    const rows: EvidenceCard[][] = [];
+    let row: EvidenceCard[] = [];
+    let used = 0;
+    for (const card of list) {
+      const w = widthOf(card);
+      const need = row.length ? used + COL_GAP + w : w;
+      if (row.length && need > WALL_SPAN) {
+        rows.push(row);
+        row = [];
+        used = 0;
+      }
+      row.push(card);
+      used = row.length === 1 ? w : used + COL_GAP + w;
+    }
+    if (row.length) rows.push(row);
+    rows.forEach((r, i) => {
+      placeRow(r, WALL_SPAN);
+      r.forEach((c) => {
+        c.y = y + i * step;
+      });
+      blocks.push(r);
+    });
+    y += rows.length * step + LANE_PAD;
+  }
+
+  // 2) sweep：块按 y 从上往下走，撞上就整体下推，直到互不重叠
+  sweepDown(blocks);
+  return cards;
 }
 
-export function inferLinks(cards: EvidenceCard[]): EvidenceLink[] {
-  const sorted = [...cards].filter((c) => c.kind !== "note").sort((a, b) => {
-    const ta = Date.parse(a.publishedAt) || Date.parse(a.firstSeenAt) || 0;
-    const tb = Date.parse(b.publishedAt) || Date.parse(b.firstSeenAt) || 0;
-    return ta - tb;
+/** 块 = 一整行（或一张 pinned 卡）。整块一起挪，行内相对位置不乱。 */
+function sweepDown(blocks: EvidenceCard[][]): void {
+  const rectOf = (c: EvidenceCard) => ({
+    x: c.x,
+    y: c.y,
+    w: (LANE[c.kind] || LANE.news).w,
+    h: (LANE_GEO[LANE_OF[c.kind] || "news"] || LANE_GEO.news).h,
   });
-  const first = sorted[0];
-  if (!first) return [];
-  const links: EvidenceLink[] = [];
-  const used = new Set<string>();
-  const add = (from: EvidenceCard, to: EvidenceCard, relation: LinkRelation) => {
-    if (from.id === to.id) return;
-    const key = `${from.id}>${to.id}:${relation}`;
-    if (used.has(key) || links.length >= 24) return;
-    used.add(key);
-    links.push({ id: `ln:${from.id}:${to.id}:${relation}`, fromId: from.id, toId: to.id, relation });
-  };
-  for (const card of sorted.slice(1)) {
-    if (card.stance === "当事人回应") add(card, first, "quote");
-    else if (card.kind === "meme" || card.kind === "derivative" || card.stance === "二创") add(card, first, "remix");
-    else if (/起诉|律师|彩礼|转账|代孕|代币|meme/.test(`${card.title}${card.summary}`)) add(card, first, "business");
-    else if (card.kind === "news") add(card, first, "report");
+  const hits = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const order = [...blocks].sort((p, q) => Math.min(...p.map((c) => c.y)) - Math.min(...q.map((c) => c.y)));
+  const placed: Rect[] = [];
+  for (const block of order) {
+    let guard = 0;
+    while (guard++ < 200) {
+      const rects = block.map(rectOf);
+      const clash = placed.find((p) => rects.some((r) => hits(r, p)));
+      if (!clash) break;
+      const top = Math.min(...block.map((c) => c.y));
+      const push = clash.y + clash.h + ROW_GAP - top;
+      block.forEach((c) => {
+        c.y += Math.max(push, 8);
+      });
+    }
+    block.forEach((c) => placed.push(rectOf(c)));
   }
-  return links;
+}
+
+type Rect = { x: number; y: number; w: number; h: number };
+
+/** 画布世界尺寸，前端按它撑开世界，不再写死。 */
+export function wallBounds(cards: EvidenceCard[]): { w: number; h: number } {
+  let w = WALL_X0 + WALL_SPAN + 120;
+  let h = 320;
+  for (const card of cards) {
+    const lane = LANE_OF[card.kind] || "news";
+    w = Math.max(w, card.x + (LANE[card.kind] || LANE.news).w + 80);
+    h = Math.max(h, card.y + (LANE_GEO[lane] || LANE_GEO.news).h + 80);
+  }
+  return { w: Math.round(w), h: Math.round(h) };
+}
+
+/**
+ * 一行之内：先按最小间距铺满，再把剩下的余量按「相邻两卡的时间间隔」分配出去。
+ * 时间挨得近的就挨得紧，隔得久的就拉得开——疏密是时间本身，不是随手排的。
+ * 这样首张左对齐、末张右边缘收在墙宽上，任何时候都不超出、不互相压住。
+ */
+function placeRow(row: EvidenceCard[], spanWidth: number): void {
+  if (!row.length) return;
+  const widthOf = (c: EvidenceCard) => (LANE[c.kind] || LANE.news).w;
+  const n = row.length;
+  const minTotal = row.reduce((s, c) => s + widthOf(c), 0) + (n - 1) * COL_GAP;
+  const slack = Math.max(spanWidth - minTotal, 0);
+
+  const ts = row.map(timeOf);
+  const gaps: number[] = [];
+  for (let i = 1; i < n; i++) gaps.push(Math.max(ts[i] - ts[i - 1], 0));
+  const gapSum = gaps.reduce((a, b) => a + b, 0);
+
+  const xs = [WALL_X0];
+  let x = WALL_X0;
+  for (let i = 1; i < n; i++) {
+    const share = gapSum > 0 ? (gaps[i - 1] / gapSum) * slack : slack / (n - 1);
+    x += widthOf(row[i - 1]) + COL_GAP + share;
+    xs.push(x);
+  }
+  // 取整后仍守住最小间距，别让舍入把两张卡蹭在一起。
+  for (let i = 0; i < n; i++) {
+    const floorX = i === 0 ? WALL_X0 : row[i - 1].x + widthOf(row[i - 1]) + COL_GAP;
+    row[i].x = Math.round(Math.max(xs[i], floorX));
+  }
+}
+
+
+const BUSINESS_RE = /起诉|律师|彩礼|转账|代孕|代币|索赔|赔偿|法院|判决|和解|meme/i;
+
+/** 从时间上更早的卡里挑上游。同题优先、离得近优先。源头只做兜底，不再张张都连它。 */
+function pickUpstream(
+  earlier: EvidenceCard[],
+  card: EvidenceCard,
+  origin: EvidenceCard,
+  outCount: Map<string, number>,
+): EvidenceCard | null {
+  const ct = timeOf(card);
+  const mine = new Set(card.keywords || []);
+  let best: EvidenceCard | null = null;
+  let bestScore = -Infinity;
+  for (const up of earlier) {
+    if ((outCount.get(up.id) || 0) >= 6) continue;
+    const theirs = new Set(up.keywords || []);
+    let overlap = 0;
+    for (const k of mine) if (theirs.has(k)) overlap += 1;
+    const gapHours = Math.max(0, (ct - timeOf(up)) / 3600000);
+    let score = overlap * 3 + (up.id === origin.id ? 1.5 : 0) - Math.min(gapHours / 72, 4);
+    if (card.stance === "当事人回应" && up.stance === "单方陈述") score += 2.5;
+    if ((card.kind === "meme" || card.kind === "derivative") && up.kind === "news") score += 1;
+    if (up.sourceName && up.sourceName === card.sourceName) score -= 1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = up;
+    }
+  }
+  return best || origin;
+}
+
+function sameStory(a: EvidenceCard, b: EvidenceCard): boolean {
+  const A = new Set(a.keywords || []);
+  const B = new Set(b.keywords || []);
+  if (!A.size || !B.size) return false;
+  let n = 0;
+  for (const k of A) if (B.has(k)) n += 1;
+  return n / Math.min(A.size, B.size) >= 0.6 && a.sourceName !== b.sourceName;
+}
+
+/**
+ * 传播链，不是星形。from = 上游（更早）→ to = 下游（更晚），绳子方向就是传播方向。
+ */
+export function inferLinks(cards: EvidenceCard[]): EvidenceLink[] {
+  const sorted = [...cards].filter((c) => c.kind !== "note").sort((a, b) => timeOf(a) - timeOf(b));
+  if (sorted.length < 2) return [];
+  const origin = sorted[0];
+  const links: EvidenceLink[] = [];
+  const seen = new Set<string>();
+  const outCount = new Map<string, number>();
+
+  const add = (from: EvidenceCard, to: EvidenceCard, relation: LinkRelation) => {
+    if (!from || !to || from.id === to.id) return;
+    const key = `${from.id}>${to.id}`;
+    if (seen.has(key)) return;
+    if ((outCount.get(from.id) || 0) >= 6) return;
+    seen.add(key);
+    outCount.set(from.id, (outCount.get(from.id) || 0) + 1);
+    links.push({ id: `ln:${from.id}:${to.id}`, fromId: from.id, toId: to.id, relation });
+  };
+
+  for (let i = 1; i < sorted.length; i++) {
+    const card = sorted[i];
+    const upstream = pickUpstream(sorted.slice(0, i), card, origin, outCount);
+    if (!upstream || upstream.id === card.id) continue;
+    let relation: LinkRelation = "report";
+    if (card.stance === "当事人回应") relation = "quote";
+    else if (card.kind === "meme" || card.kind === "derivative" || card.stance === "二创") relation = "remix";
+    else if (BUSINESS_RE.test(`${card.title}${card.summary}`)) relation = "business";
+    else if (sameStory(card, upstream)) relation = "repost";
+    add(upstream, card, relation);
+    // 上游不是源头时再补一条到源头，让图是网不是纯树。
+    if (upstream.id !== origin.id) add(origin, card, "report");
+  }
+  return links.slice(0, 60);
 }
 
 export function mergeDig(prev: Dig | null | undefined, incoming: EvidenceCard[], now = new Date().toISOString()): {
@@ -293,6 +530,7 @@ export function mergeDig(prev: Dig | null | undefined, incoming: EvidenceCard[],
         ...card,
         x: old.x,
         y: old.y,
+        pinned: old.pinned,
         firstSeenAt: old.firstSeenAt || card.firstSeenAt,
         lastSeenAt: now,
         isNew: false,
@@ -331,6 +569,7 @@ export function summarizeDig(query: string, cards: EvidenceCard[], links: Eviden
     links,
     error: extra.error || "",
     gaps: extra.gaps || [],
+    bounds: wallBounds(cards),
   };
 }
 

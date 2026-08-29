@@ -9,3 +9,4 @@ vendor/60s/node_modules/
 **/node_modules/
 *.log
 .DS_Store
+.workbuddy/

@@ -38,6 +38,39 @@
   --color-axis: oklch(99% 0.003 250 / 0.72);
   --color-label: oklch(99% 0.003 250 / 0.9);
 
+  /* 事件地图 · 证据材质（全部由基色派生，深色模式自动跟随） */
+  --color-clip: color-mix(in oklab, var(--color-card) 90%, var(--color-ink) 5%);
+  --color-clip-rule: color-mix(in oklab, var(--color-ink) 26%, transparent);
+  --color-photo: var(--color-card);
+  --color-photo-well: color-mix(in oklab, var(--color-ink) 9%, transparent);
+  --color-tag: color-mix(in oklab, var(--color-card) 86%, var(--color-accent) 6%);
+  --color-hole: color-mix(in oklab, var(--color-map) 86%, var(--color-ink) 14%);
+  --color-lane-band: color-mix(in oklab, var(--color-ink) 3%, transparent);
+  --color-grid-line: color-mix(in oklab, var(--color-ink) 11%, transparent);
+
+  /* 图钉与绳 */
+  --pin-r: 7px;
+  --pin-hi: oklch(100% 0 0 / 0.6);
+  --shadow-pin: 0 2px 3px oklch(20% 0.02 260 / 0.3);
+  --string-w: 1.6;
+  --string-w-on: 2.6;
+
+  /* 事件地图 · 尺寸（与 app/dig.ts · LANE 一致，改一处要改两边） */
+  --ev-w-news: 268px;
+  --ev-w-post: 236px;
+  --ev-w-visual: 200px;
+  --ev-w-tag: 200px;
+  --ev-w-note: 180px;
+  --lane-rail-w: 112px;
+  --dock-w: 340px;
+
+  /* 事件地图 · 投影 */
+  --shadow-clip: 1px 2px 0 var(--color-dot), 0 10px 22px -14px oklch(20% 0.02 260 / 0.3);
+  --shadow-photo: 0 2px 4px var(--color-dot), 0 16px 28px -18px oklch(20% 0.02 260 / 0.38);
+  --shadow-tag: 0 1px 2px var(--color-dot), 0 8px 16px -12px oklch(20% 0.02 260 / 0.32);
+  --shadow-note: 2px 3px 0 var(--color-dot), 0 12px 20px -16px oklch(20% 0.02 260 / 0.42);
+  --shadow-lift: 0 18px 34px -18px oklch(20% 0.02 260 / 0.44);
+
   --font-display: "Songti SC", "STSong", "Noto Serif SC", "Songti", serif;
   --font-body: "PingFang SC", "Hiragino Sans GB", "Avenir Next", "Segoe UI", sans-serif;
   --font-outlier: ui-monospace, "SF Mono", Menlo, monospace;

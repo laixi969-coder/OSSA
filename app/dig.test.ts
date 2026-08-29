@@ -4,6 +4,7 @@ import {
   classifyKind,
   classifyStance,
   hitsToCards,
+  layoutCards,
   inferLinks,
   mergeDig,
   parseRssItems,
@@ -32,13 +33,15 @@ describe("parse and classify", () => {
 });
 
 describe("merge over time", () => {
-  test("同一 url 更新时保住位置", () => {
+  // 版面是机器排的，每次合并整墙重排。只有用户拖过（pinned）的卡才钉住不动。
+  test("拖过的卡更新后仍在原位，机器排的会重排", () => {
     const first = hitsToCards(
       [{ title: "起诉彩礼", url: "https://news.example/a", publishedAt: "2026-08-27T00:00:00.000Z" }],
       "孙宇晨 景甜",
     );
     first[0].x = 120;
     first[0].y = 80;
+    first[0].pinned = true;
     const prev = {
       id: "dig:1",
       query: "孙宇晨 景甜",
@@ -69,8 +72,59 @@ describe("merge over time", () => {
     const kept = merged.cards.find((c) => c.url.includes("/a"));
     expect(kept?.x).toBe(120);
     expect(kept?.y).toBe(80);
+    expect(kept?.pinned).toBe(true);
     expect(kept?.isNew).toBe(false);
     expect(merged.cards.some((c) => c.title.includes("休战"))).toBe(true);
+  });
+
+  // 回归：以前只有新卡参与排版，老卡坐标被无视 → 新卡直接压在老卡上。
+  test("补进新卡后整墙不重叠", () => {
+    const first = hitsToCards(
+      [
+        { title: "起诉彩礼", url: "https://news.example/a", publishedAt: "2026-08-27T00:00:00.000Z" },
+        { title: "独家对话", url: "https://news.example/b", publishedAt: "2026-08-27T06:00:00.000Z" },
+      ],
+      "孙宇晨 景甜",
+    );
+    const prev = {
+      id: "dig:2",
+      query: "孙宇晨 景甜",
+      queryKey: queryKey("孙宇晨 景甜"),
+      status: "done" as const,
+      startedAt: "",
+      finishedAt: "",
+      fetchedAt: "",
+      cardCount: 2,
+      linkCount: 0,
+      newCount: 2,
+      earliestAt: "",
+      newestAt: "",
+      cards: layoutCards(first),
+      links: [],
+      error: "",
+      gaps: [],
+    };
+    const more = hitsToCards(
+      [
+        { title: "起诉彩礼", url: "https://news.example/a", publishedAt: "2026-08-27T00:00:00.000Z" },
+        { title: "独家对话", url: "https://news.example/b", publishedAt: "2026-08-27T06:00:00.000Z" },
+        { title: "景甜方回应", url: "https://news.example/d", publishedAt: "2026-08-27T00:30:00.000Z" },
+        { title: "表情包刷屏", url: "https://news.example/e", publishedAt: "2026-08-28T00:00:00.000Z" },
+        { title: "周边上架", url: "https://news.example/f", publishedAt: "2026-08-29T00:00:00.000Z" },
+      ],
+      "孙宇晨 景甜",
+    );
+    const cards = mergeDig(prev, more).cards;
+    expect(cards).toHaveLength(5);
+    const rect = (c: (typeof cards)[number]) => ({ x: c.x, y: c.y, w: 268, h: 250 });
+    for (let i = 0; i < cards.length; i++) {
+      for (let j = i + 1; j < cards.length; j++) {
+        const a = rect(cards[i]);
+        const b = rect(cards[j]);
+        const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+        expect(overlap).toBe(false);
+      }
+    }
   });
 
   test("没有 url 的命中不上墙", () => {

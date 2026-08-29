@@ -12,10 +12,13 @@ if (titleEl) {
   new MutationObserver(lockTitle).observe(titleEl, { childList: true, characterData: true, subtree: true });
 }
 
-function toast(text) {
-  toastEl.textContent = text;
-  toastEl.classList.add("show");
-  setTimeout(() => toastEl.classList.remove("show"), 2800);
+let toastTimer = 0;
+/** kind: "busy" 进行中（不自动消失）· "ok" 好了 · "err" 出错 · 不传就是普通提示。 */
+function toast(text, kind) {
+  clearTimeout(toastTimer);
+  toastEl.className = `toast show${kind ? ` ${kind}` : ""}`;
+  toastEl.innerHTML = kind === "busy" ? `<i class="spin" aria-hidden="true"></i>${esc(text)}` : esc(text);
+  if (kind !== "busy") toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2800);
 }
 
 function skelHtml(kind = "cards", n = 4) {
@@ -1286,92 +1289,159 @@ async function renderGate() {
   });
   await loadCaptcha();
 }
-
-const DIG_KIND = {
-  news: "新闻",
-  post: "帖子",
-  meme: "表情包",
-  image: "图片",
-  note: "便签",
-  derivative: "衍生品",
-};
+const DIG_KIND = { news: "新闻简报", post: "社交帖子", meme: "表情包", image: "图片", note: "便签", derivative: "衍生品" };
+const DIG_KIND_ORDER = ["news", "post", "meme", "image", "derivative", "note"];
 const DIG_REL = { report: "报道", quote: "引用", repost: "转发", remix: "二创", business: "商业" };
-const DIG_LANES = [
-  { id: "news", kinds: ["news"], label: "新闻简报", y: 36, h: 220 },
-  { id: "post", kinds: ["post"], label: "社交帖子", y: 256, h: 200 },
-  { id: "visual", kinds: ["meme", "image"], label: "表情包 / 图片", y: 456, h: 200 },
-  { id: "derivative", kinds: ["derivative"], label: "衍生品", y: 656, h: 200 },
-  { id: "note", kinds: ["note"], label: "便签", y: 856, h: 220 },
-];
+const DIG_REL_ORDER = ["report", "quote", "repost", "remix", "business"];
+const DIG_LANE = { news: "news", post: "post", meme: "visual", image: "visual", derivative: "derivative", note: "note" };
+const LANE_LABEL = { news: "新闻简报", post: "社交帖子", visual: "表情包 / 图片", derivative: "衍生品", note: "便签" };
+const LANE_ORDER = ["news", "post", "visual", "derivative", "note"];
+// 卡片几何，与 app/dig.ts · LANE 一致，改一处要改两边。
+const CARD_METRICS = {
+  news: { w: 268, h: 250 },
+  post: { w: 236, h: 220 },
+  meme: { w: 200, h: 258 },
+  image: { w: 200, h: 258 },
+  derivative: { w: 200, h: 226 },
+  note: { w: 180, h: 190 },
+};
+// 这一格空着时说什么，跟 app/dig.ts · kindGaps 同一套措辞。
+const LANE_GAP = {
+  news: "这一轮新闻不够",
+  post: "公开社交原帖这一轮没搜到",
+  visual: "表情包/热梗这一轮没搜到",
+  derivative: "衍生品这一轮没搜到",
+};
+const LANE_DOT = {
+  news: "var(--color-rel-report)",
+  post: "var(--color-rel-quote)",
+  visual: "var(--color-rel-repost)",
+  derivative: "var(--color-rel-business)",
+  note: "var(--color-warn)",
+};
+
+const metrics = (kind) => CARD_METRICS[kind] || CARD_METRICS.news;
+const evTime = (c) => Date.parse(c.publishedAt) || Date.parse(c.firstSeenAt) || 0;
+const evDate = (c) => (c.publishedAt ? String(c.publishedAt).slice(0, 10) : "");
 
 async function renderDig() {
   main.classList.add("wide");
-  const q0 = route().query.get("q") || "孙宇晨 景甜";
+  const q0 = route().query.get("q") || "";
   main.innerHTML = `<div class="dig-page">
     <header class="dig-chrome">
-      <form class="dig-bar" id="digForm">
-        <label class="sr" for="digQuery">公开事件</label>
-        <input id="digQuery" name="q" maxlength="80" value="${esc(q0)}" placeholder="任意公开事件，例如 孙宇晨 景甜" />
-        <button class="btn" type="submit" id="digGo">铺开</button>
-        <button class="btn ghost" type="button" id="digRefresh">更新</button>
+      <div class="dig-bar">
+        <form id="digForm">
+          <label class="sr" for="digQuery">公开事件</label>
+          <input id="digQuery" name="q" maxlength="80" value="${esc(q0)}" placeholder="任意公开事件，例如 孙宇晨 景甜" autocomplete="off" />
+          <button class="btn" type="submit" id="digGo">铺开</button>
+          <button class="btn ghost" type="button" id="digRefresh">更新</button>
+        </form>
         <div class="dig-tools">
           <button class="btn ghost" type="button" id="digFit">看全场</button>
+          <button class="btn ghost" type="button" id="digOrigin">回到源头</button>
+          <button class="btn ghost" type="button" id="digListBtn">清单</button>
+          <button class="btn ghost" type="button" id="digNoteBtn">贴便签</button>
           <button class="btn ghost" type="button" id="digZoomOut" aria-label="缩小">−</button>
-          <button class="btn ghost" type="button" id="digZoomIn" aria-label="放大">+</button>
+          <button class="btn ghost" type="button" id="digZoomIn" aria-label="放大">＋</button>
         </div>
-      </form>
-      <p class="dig-read">左早右晚 · 横排是种类 · 点一张卡，只亮它的线绳</p>
-      <div class="hook cold" id="digHook">输入事件，点铺开。墙只铺公开结果，搜不到的类型空着。</div>
+      </div>
+      <p class="dig-stats" id="digStats"></p>
       <div class="dig-legend" id="digLegend"></div>
-      <div class="dig-focus" id="digFocus" hidden></div>
     </header>
     <div class="dig-stage">
       <div class="dig-lane-rail" id="digLaneRail" aria-hidden="true"></div>
-      <div class="dig-empty" id="digEmpty">
-        <h2>怎么看这张图</h2>
-        <ol>
-          <li>输入公开事件，点铺开</li>
-          <li>时间从左到右铺开</li>
-          <li>横排分种类：新闻、帖子、梗图、衍生品</li>
-          <li>线绳是关系：报道、引用、转发、二创、商业</li>
-          <li>点一张卡，只亮它连着的线</li>
-        </ol>
-        <p>搜不到的类型空着，不编假卡。更新只补新卡，不推倒重来。</p>
-      </div>
-      <div class="dig-wall" id="digWall" tabindex="0">
-        <div class="dig-world" id="digWorld">
-          <div class="dig-axis" id="digAxis"></div>
-          <div id="digLanes"></div>
-          <svg class="dig-lines" id="digLines"></svg>
+      <div class="dig-canvas" id="digCanvas">
+        <div class="dig-wall" id="digWall" tabindex="0" aria-label="证据墙画布，可拖拽平移，加号减号缩放">
+          <div class="dig-world" id="digWorld">
+            <div id="digLanes"></div>
+            <div id="digGaps"></div>
+            <svg class="dig-lines" id="digLines" aria-hidden="true"></svg>
+          </div>
         </div>
+        <div class="dig-empty" id="digEmpty">
+          <h2>这张墙怎么看</h2>
+          <ol>
+            <li>顶上写一个公开事件，点铺开</li>
+            <li>一行之内横着是时间，左早右晚；行底刻度是这一行的真实日期</li>
+            <li>竖着分五格：新闻、帖子、图、衍生品、便签</li>
+            <li>绳是关系，箭头指向下游：报道、引用、转发、二创、商业</li>
+            <li>点一张卡，右边出这条链；拖动能挪位置</li>
+            <li>点「贴便签」再点墙上，就把你的判断贴上去了</li>
+          </ol>
+          <p>搜不到的格子会空着写明，不编假卡。更新只补新卡，不推倒重来。</p>
+        </div>
+        <div class="dig-skel" id="digSkel" hidden>${"<i></i>".repeat(9)}</div>
+        <div class="dig-hint" id="digHint" hidden></div>
+        <form class="dig-note-editor" id="digNoteEditor" hidden>
+          <label class="sr" for="digNoteText">便签内容</label>
+          <textarea id="digNoteText" maxlength="120" placeholder="写一句你的判断"></textarea>
+          <div class="row">
+            <button class="btn" type="submit">贴上</button>
+            <button class="btn ghost" type="button" id="digNoteCancel">取消</button>
+          </div>
+        </form>
+        <div class="dig-list" id="digList" hidden></div>
       </div>
+      <aside class="dig-dock" id="digDock" hidden aria-live="polite"></aside>
     </div>
   </div>`;
 
   let dig = null;
-  let pan = { x: 48, y: 20 };
-  let zoom = 0.78;
-  let saving = false;
+  let pan = { x: 40, y: 24 };
+  let zoom = 0.72;
   let selectedId = "";
+  let hoverLn = "";
+  let noteMode = false;
+  let saving = false;
   const kindOn = { news: true, post: true, meme: true, image: true, note: true, derivative: true };
   const relOn = { report: true, quote: true, repost: true, remix: true, business: true };
 
-  const visibleCards = () => (dig?.cards || []).filter((c) => kindOn[c.kind] !== false);
-  const cardShown = (card) => card && kindOn[card.kind] !== false;
-
-  const paintLaneRail = () => {
-    const rail = $("#digLaneRail");
-    if (!rail) return;
-    if (!dig?.cardCount) {
-      rail.innerHTML = "";
-      return;
-    }
-    rail.innerHTML = DIG_LANES.map((lane) => {
-      const top = pan.y + lane.y * zoom + 8;
-      if (top < -24 || top > 1200) return "";
-      return `<span style="top:${Math.round(top)}px">${esc(lane.label)}</span>`;
-    }).join("");
+  const allCards = () => dig?.cards || [];
+  const visibleCards = () => allCards().filter((c) => kindOn[c.kind] !== false);
+  const cardShown = (c) => Boolean(c) && kindOn[c.kind] !== false;
+  const byIdMap = () => Object.fromEntries(allCards().map((c) => [c.id, c]));
+  const liveLinks = () => (dig?.links || []).filter((ln) => relOn[ln.relation] !== false);
+  const originCard = () => {
+    const pool = allCards().filter((c) => c.kind !== "note" && evTime(c));
+    if (!pool.length) return null;
+    return pool.reduce((a, b) => (evTime(a) <= evTime(b) ? a : b));
   };
+  const degreeOf = (id) => liveLinks().filter((ln) => ln.fromId === id || ln.toId === id).length;
+  const linkedSet = (id) => {
+    const s = new Set([id]);
+    liveLinks().forEach((ln) => {
+      if (ln.fromId === id) s.add(ln.toId);
+      if (ln.toId === id) s.add(ln.fromId);
+    });
+    return s;
+  };
+  /** 顺着绳往两头走，取出这一整条链，按时间排。 */
+  const chainOf = (id) => {
+    const links = liveLinks();
+    const seen = new Set([id]);
+    const grow = (dir) => {
+      let frontier = [id];
+      while (frontier.length && seen.size < 16) {
+        const next = [];
+        for (const cur of frontier) {
+          for (const ln of links) {
+            const other = dir === "up" ? (ln.toId === cur ? ln.fromId : null) : (ln.fromId === cur ? ln.toId : null);
+            if (!other || seen.has(other)) continue;
+            seen.add(other);
+            next.push(other);
+          }
+        }
+        frontier = next;
+      }
+    };
+    grow("up");
+    grow("down");
+    const byId = byIdMap();
+    return [...seen].map((x) => byId[x]).filter((c) => cardShown(c)).sort((a, b) => evTime(a) - evTime(b));
+  };
+
+  /* ── 坐标 ─────────────────────────────────────────────────── */
+  const pinOf = (c) => ({ x: c.x + metrics(c.kind).w / 2, y: c.y + 15 });
 
   const paintTransform = () => {
     const world = $("#digWorld");
@@ -1379,8 +1449,15 @@ async function renderDig() {
     paintLaneRail();
   };
 
-  const setZoom = (next) => {
-    zoom = Math.min(1.6, Math.max(0.42, next));
+  const setZoom = (next, anchor) => {
+    const wall = $("#digWall");
+    const z0 = zoom;
+    zoom = Math.min(1.5, Math.max(0.3, next));
+    if (wall && anchor) {
+      // 以指针位置为锚缩放，别让画面跳走
+      pan.x = anchor.x - ((anchor.x - pan.x) / z0) * zoom;
+      pan.y = anchor.y - ((anchor.y - pan.y) / z0) * zoom;
+    }
     paintTransform();
   };
 
@@ -1388,8 +1465,8 @@ async function renderDig() {
     const wall = $("#digWall");
     const cards = visibleCards();
     if (!wall || !cards.length) {
-      pan = { x: 48, y: 20 };
-      zoom = 0.78;
+      pan = { x: 40, y: 24 };
+      zoom = 0.72;
       paintTransform();
       return;
     }
@@ -1398,188 +1475,286 @@ async function renderDig() {
     let maxX = -Infinity;
     let maxY = -Infinity;
     cards.forEach((c) => {
+      const m = metrics(c.kind);
       minX = Math.min(minX, c.x);
       minY = Math.min(minY, c.y);
-      maxX = Math.max(maxX, c.x + 220);
-      maxY = Math.max(maxY, c.y + 160);
+      maxX = Math.max(maxX, c.x + m.w);
+      maxY = Math.max(maxY, c.y + m.h);
     });
     const box = wall.getBoundingClientRect();
     const pad = 56;
     const sx = (box.width - pad * 2) / Math.max(maxX - minX, 240);
-    const sy = (box.height - pad * 2) / Math.max(maxY - minY, 180);
-    zoom = Math.min(1.15, Math.max(0.42, Math.min(sx, sy)));
+    const sy = (box.height - pad * 2 - 42) / Math.max(maxY - minY, 180);
+    zoom = Math.min(1.05, Math.max(0.3, Math.min(sx, sy)));
     pan.x = Math.round(pad - minX * zoom);
-    pan.y = Math.round(pad - minY * zoom);
+    pan.y = Math.round(56 + pad - minY * zoom);
     paintTransform();
+  };
+
+  /** 进场：看得清的倍率，停在最早那批证据上。看全场才整墙缩略。 */
+  const frameStart = () => {
+    const wall = $("#digWall");
+    const cards = visibleCards();
+    if (!wall || !cards.length) return fitAll();
+    let minX = Infinity;
+    let minY = Infinity;
+    cards.forEach((c) => {
+      minX = Math.min(minX, c.x);
+      minY = Math.min(minY, c.y);
+    });
+    zoom = 0.72;
+    pan.x = Math.round(48 - minX * zoom);
+    pan.y = Math.round(56 - minY * zoom);
+    paintTransform();
+  };
+
+  const focusCard = (id) => {
+    const c = allCards().find((x) => x.id === id);
+    const wall = $("#digWall");
+    if (!c || !wall) return;
+    const box = wall.getBoundingClientRect();
+    const m = metrics(c.kind);
+    zoom = Math.min(1.15, Math.max(zoom, 0.6));
+    pan.x = Math.round(box.width / 2 - (c.x + m.w / 2) * zoom);
+    pan.y = Math.round(box.height / 2 - (c.y + m.h / 2) * zoom);
+    paintTransform();
+  };
+
+  /* ── 世界底层：时间带 / 泳道 / 网格 / 时间轴 ────────────────── */
+  const paintWorldSize = () => {
+    const world = $("#digWorld");
+    if (!world) return;
+    const b = dig?.bounds || { w: 2200, h: 1300 };
+    world.style.width = `${b.w}px`;
+    world.style.height = `${b.h}px`;
+  };
+
+  /** 卡片按道、再按行分组（同一行的 y 相同）。 */
+  const rowGroups = () => {
+    const lanes = new Map();
+    visibleCards().forEach((c) => {
+      const lane = DIG_LANE[c.kind] || "news";
+      if (!lanes.has(lane)) lanes.set(lane, new Map());
+      const rows = lanes.get(lane);
+      if (!rows.has(c.y)) rows.set(c.y, []);
+      rows.get(c.y).push(c);
+    });
+    const out = [];
+    LANE_ORDER.forEach((lane) => {
+      const rows = lanes.get(lane);
+      if (!rows) return;
+      const list = [...rows.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, cards]) => {
+          let top = Infinity;
+          let bottom = -Infinity;
+          cards.forEach((c) => {
+            const m = metrics(c.kind);
+            top = Math.min(top, c.y);
+            bottom = Math.max(bottom, c.y + m.h);
+          });
+          return { top, bottom, cards };
+        });
+      out.push({ lane, rows: list });
+    });
+    return out;
+  };
+
+  /** 一行底下 3–4 个真实日期刻度，落在该行真实卡片的位置上。 */
+  const rowTicks = (cards) => {
+    const sorted = [...cards].sort((a, b) => a.x - b.x);
+    const n = Math.min(4, sorted.length);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const c = sorted[Math.round((i * (sorted.length - 1)) / Math.max(n - 1, 1))];
+      if (!c) continue;
+      out.push({ x: c.x + metrics(c.kind).w / 2, label: evDate(c) });
+    }
+    return out.filter((t, i, a) => i === 0 || (t.label !== a[i - 1].label && t.x - a[i - 1].x > 60));
   };
 
   const paintLanes = () => {
     const host = $("#digLanes");
     if (!host) return;
-    host.innerHTML = DIG_LANES.map(
-      (lane) => `<div class="dig-lane" style="top:${lane.y}px;height:${lane.h}px"></div>`,
-    ).join("");
-  };
-
-  const paintAxis = () => {
-    const axis = $("#digAxis");
-    if (!axis || !dig?.cardCount) {
-      if (axis) axis.innerHTML = "";
-      return;
-    }
-    const early = dig.earliestAt ? String(dig.earliestAt).slice(0, 10) : "";
-    const late = dig.newestAt ? String(dig.newestAt).slice(0, 10) : "";
-    const ticks = [];
-    if (early) ticks.push({ x: 72, label: early });
-    if (late && late !== early) ticks.push({ x: 1952, label: late });
-    if (early && late && early !== late) {
-      const a = Date.parse(dig.earliestAt);
-      const b = Date.parse(dig.newestAt);
-      if (Number.isFinite(a) && Number.isFinite(b) && b > a) {
-        const mid = new Date((a + b) / 2).toISOString().slice(0, 10);
-        ticks.splice(1, 0, { x: 1012, label: mid });
-      }
-    }
-    axis.innerHTML = ticks
-      .map((t) => `<span class="dig-tick" style="left:${t.x}px">${esc(t.label)}</span>`)
+    let i = 0;
+    host.innerHTML = rowGroups()
+      .map((g) => {
+        const top = Math.min(...g.rows.map((r) => r.top));
+        const bottom = Math.max(...g.rows.map((r) => r.bottom));
+        const band = `<div class="dig-lane${i % 2 ? " alt" : ""}" style="top:${Math.round(top - 22)}px;height:${Math.round(
+          bottom - top + 44,
+        )}px"></div>`;
+        i += 1;
+        const strips = g.rows
+          .map(
+            (r) =>
+              `<div class="dig-row" style="top:${Math.round(r.bottom + 4)}px">${rowTicks(r.cards)
+                .map((t) => `<span class="dig-row-tick" style="left:${Math.round(t.x)}px">${esc(t.label)}</span>`)
+                .join("")}</div>`,
+          )
+          .join("");
+        return band + strips;
+      })
       .join("");
   };
 
+  /** 搜不到的种类在墙尾留一格写明，不假装不存在。 */
+  const paintGaps = () => {
+    const host = $("#digGaps");
+    if (!host) return;
+    const present = new Set(rowGroups().map((g) => g.lane));
+    let bottom = 96;
+    visibleCards().forEach((c) => {
+      bottom = Math.max(bottom, c.y + metrics(c.kind).h);
+    });
+    let y = bottom + 52;
+    host.innerHTML = LANE_ORDER.filter((l) => !present.has(l) && LANE_GAP[l])
+      .map((l) => {
+        const box = `<div class="dig-lane" style="top:${Math.round(y - 22)}px;height:104px"></div>
+          <div class="dig-gap" style="left:88px;top:${Math.round(y)}px;width:320px;height:70px"><b>${esc(
+            LANE_LABEL[l],
+          )}</b>${esc(LANE_GAP[l])}</div>`;
+        y += 148;
+        return box;
+      })
+      .join("");
+    const world = $("#digWorld");
+    if (world) {
+      const base = parseInt(world.style.height, 10) || 0;
+      world.style.height = `${Math.max(base, Math.round(y + 20))}px`;
+    }
+  };
+
+  const paintLaneRail = () => {
+    const rail = $("#digLaneRail");
+    if (!rail) return;
+    if (!dig?.cardCount) {
+      rail.innerHTML = "";
+      return;
+    }
+    rail.innerHTML = rowGroups()
+      .map((g) => {
+        const top = Math.min(...g.rows.map((r) => r.top));
+        const y = Math.round(pan.y + (top - 22) * zoom + 4);
+        if (y < -30 || y > 4000) return "";
+        const n = g.rows.reduce((s, r) => s + r.cards.length, 0);
+        return `<span style="top:${y}px"><i style="background:${LANE_DOT[g.lane]}"></i>${esc(LANE_LABEL[g.lane])}<b>${n}</b></span>`;
+      })
+      .join("");
+  };
+
+  /* ── 绳 ───────────────────────────────────────────────────── */
   const drawLines = () => {
     const svg = $("#digLines");
     if (!svg || !dig) return;
-    const cards = dig.cards || [];
-    const byId = Object.fromEntries(cards.map((c) => [c.id, c]));
-    const linked = new Set();
-    if (selectedId) {
-      linked.add(selectedId);
-      (dig.links || []).forEach((ln) => {
-        if (ln.fromId === selectedId || ln.toId === selectedId) {
-          linked.add(ln.fromId);
-          linked.add(ln.toId);
-        }
-      });
-    }
-    const parts = (dig.links || [])
+    const byId = byIdMap();
+    const b = dig.bounds || { w: 2200, h: 1300 };
+    const defs = DIG_REL_ORDER.map(
+      (r) =>
+        `<marker id="ar-${r}" viewBox="0 0 8 8" refX="7.2" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path class="ar-${r}" d="M0 0.6 L8 4 L0 7.4 z"/></marker>`,
+    ).join("");
+    const parts = liveLinks()
       .map((ln) => {
-        if (relOn[ln.relation] === false) return "";
         const a = byId[ln.fromId];
-        const b = byId[ln.toId];
-        if (!cardShown(a) || !cardShown(b)) return "";
-        const x1 = a.x + 110;
-        const y1 = a.y + 10;
-        const x2 = b.x + 110;
-        const y2 = b.y + 10;
-        const mx = (x1 + x2) / 2;
-        const my = Math.min(y1, y2) - 48;
-        const tx = 0.25 * x1 + 0.5 * mx + 0.25 * x2;
-        const ty = Math.max(56, 0.25 * y1 + 0.5 * my + 0.25 * y2);
-        const dim = selectedId && !linked.has(ln.fromId) ? " is-dim" : selectedId && linked.has(ln.fromId) ? " is-on" : "";
-        const labelDim = selectedId && !linked.has(ln.fromId) ? " is-dim" : "";
-        return `<path class="rel-${esc(ln.relation)}${dim}" d="M${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}" />
-          <text class="${labelDim}" x="${tx}" y="${ty - 4}" text-anchor="middle">${esc(DIG_REL[ln.relation] || ln.relation)}</text>`;
+        const c = byId[ln.toId];
+        if (!cardShown(a) || !cardShown(c)) return "";
+        const p1 = pinOf(a);
+        const p2 = pinOf(c);
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const sag = Math.min(84, Math.max(22, dist * 0.17));
+        const ey = p2.y + 14;
+        const d = `M${p1.x} ${p1.y} C ${p1.x} ${Math.round(p1.y + sag)} ${p2.x} ${Math.round(ey + sag)} ${p2.x} ${Math.round(ey)}`;
+        const label = DIG_REL[ln.relation] || ln.relation;
+        const lw = label.length * 11 + 16;
+        const cx = Math.round((p1.x + p2.x) / 2);
+        const cy = Math.round((p1.y + ey) / 2 + sag * 0.75);
+        const touching = selectedId && (ln.fromId === selectedId || ln.toId === selectedId);
+        const state = !selectedId ? "" : touching ? " is-on" : " is-dim";
+        const id = esc(ln.id);
+        return `<path class="str rel-${ln.relation}${state}" d="${d}" data-ln="${id}" marker-end="url(#ar-${ln.relation})" />
+          <path class="hit" d="${d}" data-ln="${id}" />
+          <g class="rel-chip${state}" data-ln="${id}"><rect x="${cx - lw / 2}" y="${cy - 9}" width="${lw}" height="18" rx="9" /><text x="${cx}" y="${cy + 4}" text-anchor="middle">${esc(label)}</text></g>`;
       })
       .join("");
-    svg.innerHTML = parts;
-    svg.setAttribute("viewBox", "0 0 2400 1400");
+    svg.setAttribute("viewBox", `0 0 ${b.w} ${b.h}`);
+    svg.innerHTML = `<defs>${defs}</defs>${parts}`;
   };
 
-  const paintFocus = () => {
-    const box = $("#digFocus");
-    if (!box) return;
-    if (!selectedId || !dig) {
-      box.hidden = true;
-      box.textContent = "";
-      return;
+  /* ── 证据卡 ───────────────────────────────────────────────── */
+  const cardHtml = (card) => {
+    const src = card.sourceName || "";
+    const date = evDate(card);
+    const sum = String(card.summary || "").slice(0, 108);
+    const origin = originCard();
+    const isOrigin = origin && origin.id === card.id;
+    const open = card.url ? `<a class="btn ghost" href="${esc(card.url)}" target="_blank" rel="noopener">原文</a>` : "";
+    const acts = `<div class="actions">${open}<button class="btn" type="button" data-topic>选这个</button></div>`;
+    if (card.kind === "news") {
+      return `<i class="pin" aria-hidden="true"></i>
+        <div class="ev-k"><span>${esc(src || "来源未标")}</span><span>${esc(date)}</span></div>
+        <h3>${esc(card.title)}</h3>
+        <p>${esc(sum)}</p>
+        <div class="ev-src">${esc(card.stance || "")}${card.isNew ? " · 新到" : ""}</div>
+        ${isOrigin ? '<span class="stamp">第一现场</span>' : ""}
+        ${acts}`;
     }
-    const card = (dig.cards || []).find((c) => c.id === selectedId);
-    if (!card) {
-      box.hidden = true;
-      return;
+    if (card.kind === "post") {
+      return `<i class="pin" aria-hidden="true"></i>
+        <div class="ev-head">
+          <span class="ev-ava" aria-hidden="true">${esc((src || "?").slice(0, 1))}</span>
+          <span class="ev-who"><b>${esc(src || "未知平台")}</b><span class="ev-k">${esc(card.stance || "帖子")} · ${esc(date)}</span></span>
+        </div>
+        <h3>${esc(card.title)}</h3>
+        <p>${esc(sum || card.title)}</p>
+        ${acts}`;
     }
-    const links = (dig.links || []).filter(
-      (ln) => (ln.fromId === selectedId || ln.toId === selectedId) && relOn[ln.relation] !== false,
-    );
-    const rels = [...new Set(links.map((ln) => DIG_REL[ln.relation] || ln.relation))];
-    box.hidden = false;
-    box.textContent = links.length
-      ? `这条是「${card.stance}」· 连了 ${links.length} 条线绳：${rels.join("、")}`
-      : `这条是「${card.stance}」· 还没有连上别的卡`;
-  };
-
-  const paintLegend = () => {
-    const el = $("#digLegend");
-    if (!el) return;
-    const cards = dig?.cards || [];
-    const kindBits = Object.keys(DIG_KIND)
-      .map((k) => {
-        const n = cards.filter((c) => c.kind === k).length;
-        if (!n && k !== "news") return "";
-        return `<button type="button" class="dig-chip ${kindOn[k] ? "on" : "off"}" data-kind="${k}">${esc(DIG_KIND[k])}${n ? " " + n : ""}</button>`;
-      })
-      .join("");
-    const relBits = Object.keys(DIG_REL)
-      .map(
-        (k) =>
-          `<button type="button" class="dig-chip rel-${k} ${relOn[k] ? "on" : "off"}" data-rel="${k}"><i class="sw"></i>${esc(DIG_REL[k])}</button>`,
-      )
-      .join("");
-    const ago = dig?.fetchedAt ? `<span class="leg-k">${esc(timeAgo(dig.fetchedAt).replace("上次刷新", "上次搜过"))}</span>` : "";
-    const gaps = (dig?.gaps || []).map((g) => `<span class="leg-k">${esc(g)}</span>`).join("");
-    el.innerHTML = `<span class="leg-k">种类</span>${kindBits}<span class="leg-k">线绳</span>${relBits}${ago}${gaps}`;
-    el.querySelectorAll("[data-kind]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        kindOn[btn.dataset.kind] = !kindOn[btn.dataset.kind];
-        paintCards();
-        paintLegend();
-      });
-    });
-    el.querySelectorAll("[data-rel]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        relOn[btn.dataset.rel] = !relOn[btn.dataset.rel];
-        drawLines();
-        paintLegend();
-        paintFocus();
-      });
-    });
+    if (card.kind === "meme" || card.kind === "image") {
+      const shot = card.imageUrl
+        ? coverHtml(card.imageUrl, "ev-shot")
+        : `<div class="ev-shot-none">没抓到图</div>`;
+      return `<i class="pin" aria-hidden="true"></i>
+        ${shot}
+        <h3>${esc(card.title)}</h3>
+        <div class="ev-src">${esc(src)}${date ? " · " + esc(date) : ""}</div>
+        ${acts}`;
+    }
+    if (card.kind === "derivative") {
+      return `<i class="pin" aria-hidden="true"></i>
+        <div class="ev-k">衍生品</div>
+        <h3>${esc(card.title)}</h3>
+        <p>${esc(sum.slice(0, 72))}</p>
+        <div class="ev-src">${esc(src)}${date ? " · " + esc(date) : ""}</div>
+        ${acts}`;
+    }
+    return `<i class="pin" aria-hidden="true"></i>
+      <h3>${esc(card.title)}</h3>
+      <div class="ev-src">${esc(date)} · 我贴的</div>`;
   };
 
   const paintCards = () => {
     const world = $("#digWorld");
     if (!world) return;
     [...world.querySelectorAll(".ev-card")].forEach((n) => n.remove());
-    const linked = new Set();
-    if (selectedId && dig) {
-      linked.add(selectedId);
-      (dig.links || []).forEach((ln) => {
-        if (ln.fromId === selectedId || ln.toId === selectedId) {
-          linked.add(ln.fromId);
-          linked.add(ln.toId);
-        }
-      });
-    }
+    const active = selectedId ? linkedSet(selectedId) : null;
     visibleCards().forEach((card) => {
       const el = document.createElement("article");
-      const dim = selectedId && !linked.has(card.id);
-      el.className = `ev-card kind-${card.kind}${card.isNew ? " is-new" : ""}${card.stale ? " is-stale" : ""}${card.id === selectedId ? " is-on" : ""}${dim ? " is-dim" : ""}`;
+      const isOn = card.id === selectedId;
+      const dim = Boolean(active) && !active.has(card.id);
+      const deg = degreeOf(card.id);
+      el.className = `ev-card kind-${card.kind}${card.isNew ? " is-new" : ""}${card.stale ? " is-stale" : ""}${
+        isOn ? " is-on" : ""
+      }${dim ? " is-dim" : ""}${active && !isOn && !dim ? " is-linked" : ""}`;
       el.style.left = `${card.x}px`;
       el.style.top = `${card.y}px`;
       el.dataset.id = card.id;
-      const img = card.imageUrl ? coverHtml(card.imageUrl, "ev-cover") : "";
-      const open = card.url
-        ? `<a class="btn ghost" href="${esc(card.url)}" target="_blank" rel="noopener">原文</a>`
-        : "";
-      el.innerHTML = `<i class="pin" aria-hidden="true"></i>
-        <div class="ev-k">${esc(DIG_KIND[card.kind] || card.kind)} · ${esc(card.stance || "")}${card.isNew ? " · 新到" : ""}</div>
-        <h3>${esc(card.title)}</h3>
-        <p>${esc(card.summary || "")}</p>
-        ${img}
-        <div class="ev-src">${esc(card.sourceName || "")}${card.publishedAt ? " · " + esc(String(card.publishedAt).slice(0, 10)) : ""}</div>
-        <div class="actions">
-          ${open}
-          <button class="btn" data-topic>选这个</button>
-        </div>`;
-      world.appendChild(el);
+      el.tabIndex = 0;
+      el.setAttribute("role", "button");
+      el.setAttribute(
+        "aria-label",
+        `${DIG_KIND[card.kind] || card.kind}：${card.title}。${card.sourceName || ""} ${evDate(card)}。连着 ${deg} 条线绳`,
+      );
+      el.innerHTML = cardHtml(card);
+      if (deg) el.insertAdjacentHTML("afterbegin", `<span class="ev-deg">${deg}</span>`);
       el.querySelector("[data-topic]")?.addEventListener("click", (e) => {
         e.stopPropagation();
         toTopic({
@@ -1591,15 +1766,193 @@ async function renderDig() {
           cover: card.imageUrl,
         });
       });
+      world.appendChild(el);
       bindDrag(el, card);
     });
     drawLines();
-    paintFocus();
+    paintDock();
   };
 
+  const paintDock = () => {
+    const box = $("#digDock");
+    if (!box) return;
+    if (!selectedId || !dig) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    const card = allCards().find((c) => c.id === selectedId);
+    if (!card) {
+      box.hidden = true;
+      return;
+    }
+    const steps = chainOf(card.id);
+    const origin = originCard();
+    const links = liveLinks();
+    const ids = new Set(steps.map((s) => s.id));
+    const relCount = {};
+    links
+      .filter((ln) => ids.has(ln.fromId) && ids.has(ln.toId))
+      .forEach((ln) => {
+        relCount[ln.relation] = (relCount[ln.relation] || 0) + 1;
+      });
+    const relBits = Object.keys(relCount)
+      .map((k) => `${DIG_REL[k]} ${relCount[k]} 条`)
+      .join("、");
+    const first = steps[0];
+    const last = steps[steps.length - 1];
+    const summary =
+      steps.length > 1
+        ? `这条链 <b>${steps.length}</b> 手，${esc(evDate(first))} → ${esc(evDate(last))}${relBits ? " · " + relBits : ""}`
+        : "这张卡还没连上别的卡。搜到更多结果后点更新，会把它接上。";
+    const inRel = (id) => {
+      const ln = links.find((l) => l.toId === id && ids.has(l.fromId));
+      if (!ln) return "";
+      const up = allCards().find((c) => c.id === ln.fromId);
+      return `<span class="rel">${esc(DIG_REL[ln.relation] || ln.relation)} · 来自 ${esc(up?.sourceName || up?.title || "上游")}</span>`;
+    };
+    const open = card.url
+      ? `<a class="btn ghost" href="${esc(card.url)}" target="_blank" rel="noopener">打开原文</a>`
+      : "";
+    box.hidden = false;
+    box.innerHTML = `<div class="dock-top">
+        <span class="dock-kind">${esc(DIG_KIND[card.kind] || card.kind)}${card.stance ? " · " + esc(card.stance) : ""}</span>
+        <button class="dock-x" type="button" id="dockClose" aria-label="关掉这条链">✕</button>
+      </div>
+      <h2 class="dock-title">${esc(card.title)}</h2>
+      <p class="dock-meta">${esc(card.sourceName || "来源未标")} · ${esc(evDate(card) || "日期未标")}${
+        card.stale ? " · 这一轮没再搜到" : ""
+      }</p>
+      ${card.summary ? `<p class="dock-meta">${esc(card.summary)}</p>` : ""}
+      <p class="dock-sum">${summary}</p>
+      <div class="dock-acts">${open}<button class="btn" type="button" id="dockTopic">选这个</button></div>
+      <p class="dock-h">这条链上的每一步</p>
+      <ol class="dock-steps">${steps
+        .map((c, i) => {
+          const rel = inRel(c.id);
+          const firstStep = origin && c.id === origin.id;
+          return `<li class="dock-step${c.id === selectedId ? " is-on" : ""}">
+            <span class="n">${i + 1}</span>
+            <button type="button" data-goto="${esc(c.id)}">
+              <span class="t">${esc(c.title)}</span>
+              <span class="m">${esc(evDate(c))} · ${esc(c.sourceName || DIG_KIND[c.kind] || "")}</span>
+              ${rel || (firstStep ? '<span class="rel">第一现场</span>' : '<span class="rel">这一段里最早</span>')}
+            </button>
+          </li>`;
+        })
+        .join("")}</ol>`;
+    $("#dockClose")?.addEventListener("click", () => selectCard(""));
+    $("#dockTopic")?.addEventListener("click", () =>
+      toTopic({
+        title: card.title,
+        url: card.url,
+        source: card.sourceName,
+        originLabel: "事件地图",
+        summary: card.summary,
+        cover: card.imageUrl,
+      }),
+    );
+    box.querySelectorAll("[data-goto]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectCard(btn.dataset.goto);
+        focusCard(btn.dataset.goto);
+      });
+    });
+  };
+
+  /* ── 统计 / 图例 ───────────────────────────────────────────── */
+  const paintStats = () => {
+    const el = $("#digStats");
+    if (!el) return;
+    if (!dig?.cardCount) {
+      el.className = "dig-stats";
+      el.innerHTML = `<span class="cold">${esc(
+        dig?.error || "输入一个公开事件，点铺开。墙只铺搜到的结果，搜不到的格子空着写明。",
+      )}</span>`;
+      return;
+    }
+    const shown = liveLinks().length;
+    const early = dig.earliestAt ? String(dig.earliestAt).slice(0, 10) : "";
+    const late = dig.newestAt ? String(dig.newestAt).slice(0, 10) : "";
+    const span = early && late && early !== late ? `${early} → ${late}` : early;
+    const ago = dig.fetchedAt ? timeAgo(dig.fetchedAt).replace("上次刷新", "上次搜过").replace("刚刚刷新", "刚刚搜过") : "";
+    el.className = "dig-stats";
+    el.innerHTML = [
+      `<span><b>${dig.cardCount}</b> 张证据</span>`,
+      `<span><b>${shown}</b> 条线绳</span>`,
+      span ? `<span>${esc(span)}</span>` : "",
+      dig.newCount ? `<span>新到 <b>${dig.newCount}</b> 张</span>` : "",
+      ago ? `<span>${esc(ago)}</span>` : "",
+    ]
+      .filter(Boolean)
+      .join("");
+  };
+
+  const paintLegend = () => {
+    const el = $("#digLegend");
+    if (!el) return;
+    const cards = allCards();
+    const kindBits = DIG_KIND_ORDER.map((k) => {
+      const n = cards.filter((c) => c.kind === k).length;
+      const shape = k === "meme" || k === "image" ? "lg-visual" : `lg-${k}`;
+      return `<button type="button" class="dig-chip ${kindOn[k] ? "on" : "off"}" data-kind="${k}" aria-pressed="${kindOn[k]}"${
+        n ? "" : " disabled"
+      }><i class="lg ${shape}"></i>${esc(DIG_KIND[k])}<span class="n">${n}</span></button>`;
+    }).join("");
+    const relBits = DIG_REL_ORDER.map(
+      (k) =>
+        `<button type="button" class="dig-chip ${relOn[k] ? "on" : "off"}" data-rel="${k}" aria-pressed="${relOn[k]}"><svg class="sw-str" viewBox="0 0 22 10" aria-hidden="true"><path class="rel-${k}" d="M1 2 C 1 11, 21 11, 21 2"/></svg>${esc(
+          DIG_REL[k],
+        )}</button>`,
+    ).join("");
+    const gaps = (dig?.gaps || []).map((g) => `<span class="leg-k">没搜到：${esc(g)}</span>`).join("");
+    el.innerHTML = `<span class="leg-k">种类</span>${kindBits}<i class="leg-sep" aria-hidden="true"></i><span class="leg-k">线绳</span>${relBits}${gaps}`;
+    el.querySelectorAll("[data-kind]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        kindOn[btn.dataset.kind] = !kindOn[btn.dataset.kind];
+        if (selectedId && !kindOn[(allCards().find((c) => c.id === selectedId) || {}).kind]) selectedId = "";
+        paintAll(false);
+      });
+    });
+    el.querySelectorAll("[data-rel]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        relOn[btn.dataset.rel] = !relOn[btn.dataset.rel];
+        paintAll(false);
+      });
+    });
+  };
+
+  const paintAll = (shouldFit) => {
+    paintWorldSize();
+    paintStats();
+    paintLegend();
+    paintLanes();
+    paintGaps();
+    paintCards();
+    const empty = $("#digEmpty");
+    if (empty) empty.hidden = Boolean(dig?.cardCount);
+    if (shouldFit) fitAll();
+    else paintTransform();
+  };
+
+  /* ── 选中 / 拖拽 ───────────────────────────────────────────── */
   const selectCard = (id) => {
     selectedId = selectedId === id ? "" : id;
     paintCards();
+  };
+
+  /** 只把刚拖过的那张钉住（pinned），其余留着可重排，避免整墙被旧坐标锁死。 */
+  const saveLayout = async (movedId) => {
+    if (!dig || saving) return;
+    saving = true;
+    await api("/api/dig/layout", {
+      method: "POST",
+      body: JSON.stringify({
+        id: dig.id,
+        cards: allCards().map((c) => ({ id: c.id, x: c.x, y: c.y, pinned: c.id === movedId })),
+      }),
+    });
+    saving = false;
   };
 
   const bindDrag = (el, card) => {
@@ -1607,10 +1960,12 @@ async function renderDig() {
     let moved = 0;
     el.addEventListener("pointerdown", (e) => {
       if (e.target.closest("a,button")) return;
+      if (noteMode) return;
       e.stopPropagation();
       el.setPointerCapture(e.pointerId);
       moved = 0;
       drag = { x: e.clientX, y: e.clientY, ox: card.x, oy: card.y };
+      el.classList.add("is-dragging");
     });
     el.addEventListener("pointermove", (e) => {
       if (!drag) return;
@@ -1620,76 +1975,144 @@ async function renderDig() {
       if (moved < 6) return;
       card.x = Math.round(drag.ox + dx / zoom);
       card.y = Math.round(drag.oy + dy / zoom);
+      card.pinned = true;
       el.style.left = `${card.x}px`;
       el.style.top = `${card.y}px`;
       drawLines();
     });
-    const end = async () => {
-      if (!drag || !dig) return;
+    const end = () => {
+      if (!drag) return;
       const wasDrag = moved >= 6;
       drag = null;
+      el.classList.remove("is-dragging");
       if (!wasDrag) {
         selectCard(card.id);
         return;
       }
-      if (saving) return;
-      saving = true;
-      await api("/api/dig/layout", {
-        method: "POST",
-        body: JSON.stringify({
-          id: dig.id,
-          cards: (dig.cards || []).map((c) => ({ id: c.id, x: c.x, y: c.y })),
-        }),
-      });
-      saving = false;
+      paintLanes();
+      saveLayout(card.id);
     };
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        selectCard(card.id);
+        return;
+      }
+      if (e.key.startsWith("Arrow")) {
+        e.preventDefault();
+        const cur = pinOf(card);
+        const pool = visibleCards().filter((c) => c.id !== card.id);
+        if (!pool.length) return;
+        const pick = (score) => pool.reduce((a, b) => (score(a) < score(b) ? a : b));
+        let next = null;
+        if (e.key === "ArrowRight") next = pick((c) => (pinOf(c).x > cur.x ? pinOf(c).x - cur.x + Math.abs(pinOf(c).y - cur.y) * 3 : Infinity));
+        if (e.key === "ArrowLeft") next = pick((c) => (pinOf(c).x < cur.x ? cur.x - pinOf(c).x + Math.abs(pinOf(c).y - cur.y) * 3 : Infinity));
+        if (e.key === "ArrowDown") next = pick((c) => (pinOf(c).y > cur.y ? pinOf(c).y - cur.y + Math.abs(pinOf(c).x - cur.x) * 3 : Infinity));
+        if (e.key === "ArrowUp") next = pick((c) => (pinOf(c).y < cur.y ? cur.y - pinOf(c).y + Math.abs(pinOf(c).x - cur.x) * 3 : Infinity));
+        if (next) {
+          $(`.ev-card[data-id="${next.id}"]`)?.focus();
+          focusCard(next.id);
+        }
+      }
+    });
   };
 
-  const paintHook = () => {
-    const hook = $("#digHook");
-    const empty = $("#digEmpty");
-    if (!hook) return;
-    const hasCards = Boolean(dig?.cardCount);
-    if (empty) empty.hidden = hasCards;
-    if (!hasCards) {
-      hook.className = "hook cold";
-      hook.textContent = dig?.error || "输入任意公开事件，点铺开。墙只铺搜到的结果。";
-      return;
+  /* ── 便签 ─────────────────────────────────────────────────── */
+  const setNoteMode = (on) => {
+    noteMode = on;
+    const btn = $("#digNoteBtn");
+    const hint = $("#digHint");
+    const wall = $("#digWall");
+    btn?.classList.toggle("on", on);
+    wall?.classList.toggle("is-noting", on);
+    if (hint) {
+      hint.hidden = !on;
+      hint.textContent = on ? "在墙上点一下要贴的位置，写好按贴上" : "";
     }
-    hook.className = "hook";
-    const n = dig.newCount ? ` · 新到 ${dig.newCount} 张` : "";
-    const early = dig.earliestAt ? String(dig.earliestAt).slice(0, 10) : "";
-    const late = dig.newestAt ? String(dig.newestAt).slice(0, 10) : "";
-    const span = early && late && early !== late ? `${early} → ${late}` : early;
-    hook.textContent = `这场 ${dig.cardCount} 张证据 · ${dig.linkCount} 条线绳${n}${span ? " · " + span : ""}`;
+    if (!on) closeNoteEditor();
+  };
+  const closeNoteEditor = () => {
+    const ed = $("#digNoteEditor");
+    if (ed) ed.hidden = true;
+  };
+  const openNoteEditor = (clientX, clientY) => {
+    const canvas = $("#digCanvas");
+    const ed = $("#digNoteEditor");
+    if (!canvas || !ed) return;
+    const box = canvas.getBoundingClientRect();
+    const local = { x: clientX - box.left, y: clientY - box.top };
+    ed.hidden = false;
+    ed.style.left = `${Math.max(8, Math.min(box.width - 210, local.x - 100))}px`;
+    ed.style.top = `${Math.max(8, Math.min(box.height - 150, local.y - 40))}px`;
+    ed.dataset.wx = String(Math.round((local.x - pan.x) / zoom));
+    ed.dataset.wy = String(Math.round((local.y - pan.y) / zoom));
+    $("#digNoteText")?.focus();
   };
 
-  const paintAll = (shouldFit) => {
-    paintHook();
-    paintLanes();
-    paintAxis();
-    paintLegend();
-    paintCards();
-    if (shouldFit) fitAll();
-    else paintTransform();
+  /* ── 清单（窄屏也能读全） ──────────────────────────────────── */
+  const closeList = () => {
+    const box = $("#digList");
+    if (box) box.hidden = true;
+    $("#digListBtn")?.classList.remove("on");
+  };
+  const paintList = () => {
+    const box = $("#digList");
+    if (!box) return;
+    const cards = visibleCards().slice().sort((a, b) => evTime(a) - evTime(b));
+    const origin = originCard();
+    const links = liveLinks();
+    const byId = byIdMap();
+    box.innerHTML = `<h2>${esc(dig?.query || "这场")} · 证据清单</h2>
+      <p class="lead">按时间排 ${cards.length} 条。点一条回到墙上的位置。</p>
+      <ol>${cards
+        .map((c) => {
+          const ln = links.find((l) => l.toId === c.id);
+          const up = ln ? byId[ln.fromId] : null;
+          const rel = up
+            ? `${esc(DIG_REL[ln.relation] || ln.relation)} · 来自 ${esc(up.sourceName || up.title)}`
+            : origin && c.id === origin.id
+              ? "这一场最先出现的一条"
+              : "还没连上别的卡";
+          return `<li><button type="button" data-goto="${esc(c.id)}">
+            <span class="r1"><span class="rk">${esc(DIG_KIND[c.kind] || c.kind)}</span><span>${esc(evDate(c))}</span><span>${esc(
+              c.sourceName || "",
+            )}</span></span>
+            <span class="r2">${esc(c.title)}</span>
+            <span class="r3">${rel}</span>
+          </button></li>`;
+        })
+        .join("")}</ol>
+      <button class="btn ghost close" type="button" id="digListClose">回到墙上</button>`;
+    box.querySelectorAll("[data-goto]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        closeList();
+        if (selectedId !== btn.dataset.goto) selectCard(btn.dataset.goto);
+        focusCard(btn.dataset.goto);
+      });
+    });
+    $("#digListClose")?.addEventListener("click", closeList);
   };
 
+  /* ── 跑一轮搜索 ────────────────────────────────────────────── */
   const run = async (query) => {
     const go = $("#digGo");
+    const skel = $("#digSkel");
     if (go) {
       go.disabled = true;
-      go.classList.add("busy");
       go.dataset.state = "loading";
     }
-    toast("正在搜公开结果…");
+    if (skel) skel.hidden = false;
+    const empty = $("#digEmpty");
+    if (empty) empty.hidden = true;
+    toast("正在搜公开结果…", "busy");
     const data = await api("/api/dig", { method: "POST", body: JSON.stringify({ query }) });
     if (go) {
       go.disabled = false;
-      go.classList.remove("busy");
       delete go.dataset.state;
     }
+    if (skel) skel.hidden = true;
     if (data.dig) {
       dig = data.dig;
       selectedId = "";
@@ -1697,73 +2120,157 @@ async function renderDig() {
         history.replaceState(null, "", `#/dig?q=${encodeURIComponent(dig.query)}`);
       }
       paintAll(true);
-      if (!dig.cardCount) toast(dig.error || "这一轮没搜到");
-      else toast(dig.newCount ? `补上 ${dig.newCount} 张` : `铺上 ${dig.cardCount} 张`);
-    } else toast(data.error || "这场没铺开");
+      if (!dig.cardCount) toast(dig.error || "这一轮没搜到，换一个说法试试", "err");
+      else toast(dig.newCount ? `补上 ${dig.newCount} 张` : `铺上 ${dig.cardCount} 张`, "ok");
+    } else {
+      paintAll(false);
+      toast(data.error || "这场没铺开", "err");
+    }
   };
 
-  paintLanes();
+  paintWorldSize();
   const loaded = await api(`/api/dig?q=${encodeURIComponent(q0)}`);
   if (loaded.dig) {
     dig = loaded.dig;
-    $("#digQuery").value = dig.query || q0;
+    const input = $("#digQuery");
+    if (input) input.value = dig.query || q0;
     paintAll(Boolean(dig.cardCount));
+    if (dig.cardCount) frameStart();
   } else {
     paintAll(false);
   }
 
-  $("#digForm").addEventListener("submit", (e) => {
+  /* ── 事件绑定 ─────────────────────────────────────────────── */
+  $("#digForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    const q = $("#digQuery")?.value.trim();
-    if (!q) return toast("先写一个公开事件");
+    const input = $("#digQuery");
+    const q = input?.value.trim();
+    if (!q) {
+      input?.setAttribute("aria-invalid", "true");
+      input?.focus();
+      return toast("先写一个公开事件", "err");
+    }
+    input?.removeAttribute("aria-invalid");
     run(q);
   });
-  $("#digRefresh").addEventListener("click", () => {
+  $("#digRefresh")?.addEventListener("click", () => {
     const q = $("#digQuery")?.value.trim() || dig?.query;
-    if (!q) return toast("先写一个公开事件");
+    if (!q) return toast("先写一个公开事件", "err");
     run(q);
   });
   $("#digFit")?.addEventListener("click", fitAll);
-  $("#digZoomIn")?.addEventListener("click", () => setZoom(zoom * 1.12));
-  $("#digZoomOut")?.addEventListener("click", () => setZoom(zoom * 0.9));
+  $("#digOrigin")?.addEventListener("click", () => {
+    const o = originCard();
+    if (!o) return toast("这场还没有能定位的源头", "err");
+    if (selectedId !== o.id) selectCard(o.id);
+    focusCard(o.id);
+  });
+  $("#digListBtn")?.addEventListener("click", () => {
+    const box = $("#digList");
+    if (!box) return;
+    if (!box.hidden) return closeList();
+    if (!dig?.cardCount) return toast("先铺开一场，清单才有内容", "err");
+    paintList();
+    box.hidden = false;
+    $("#digListBtn")?.classList.add("on");
+  });
+  $("#digNoteBtn")?.addEventListener("click", () => {
+    if (!dig?.cardCount) return toast("先铺开一场，再往上贴便签", "err");
+    setNoteMode(!noteMode);
+  });
+  $("#digNoteCancel")?.addEventListener("click", () => setNoteMode(false));
+  $("#digNoteEditor")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const ed = e.currentTarget;
+    const text = $("#digNoteText")?.value.trim();
+    if (!text) return toast("便签要写一句", "err");
+    const data = await api("/api/dig/note", {
+      method: "POST",
+      body: JSON.stringify({ id: dig?.id, title: text, x: Number(ed.dataset.wx) || 120, y: Number(ed.dataset.wy) || 900 }),
+    });
+    if (data.dig) {
+      dig = data.dig;
+      setNoteMode(false);
+      paintAll(false);
+      toast("贴上了", "ok");
+    } else toast(data.error || "没贴上", "err");
+  });
+  $("#digZoomIn")?.addEventListener("click", () => setZoom(zoom * 1.14));
+  $("#digZoomOut")?.addEventListener("click", () => setZoom(zoom * 0.88));
 
   const wall = $("#digWall");
   let panDrag = null;
-  wall.addEventListener("pointerdown", (e) => {
+  wall?.addEventListener("pointerdown", (e) => {
     if (e.target.closest(".ev-card")) return;
+    if (noteMode) {
+      openNoteEditor(e.clientX, e.clientY);
+      return;
+    }
+    if (e.target.closest("a")) return;
     if (selectedId) {
       selectedId = "";
       paintCards();
     }
     wall.setPointerCapture(e.pointerId);
+    wall.classList.add("is-panning");
     panDrag = { x: e.clientX, y: e.clientY, ox: pan.x, oy: pan.y };
   });
-  wall.addEventListener("pointermove", (e) => {
+  wall?.addEventListener("pointermove", (e) => {
     if (!panDrag) return;
     pan.x = panDrag.ox + (e.clientX - panDrag.x);
     pan.y = panDrag.oy + (e.clientY - panDrag.y);
     paintTransform();
   });
-  wall.addEventListener("pointerup", () => {
+  const endPan = () => {
     panDrag = null;
-  });
-  wall.addEventListener(
+    wall?.classList.remove("is-panning");
+  };
+  wall?.addEventListener("pointerup", endPan);
+  wall?.addEventListener("pointercancel", endPan);
+  wall?.addEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
-      setZoom(zoom * (e.deltaY > 0 ? 0.92 : 1.08));
+      if (noteMode) return;
+      const box = wall.getBoundingClientRect();
+      setZoom(zoom * (e.deltaY > 0 ? 0.9 : 1.1), { x: e.clientX - box.left, y: e.clientY - box.top });
     },
     { passive: false },
   );
-  wall.addEventListener("keydown", (e) => {
-    if (e.key === "+" || e.key === "=") setZoom(zoom * 1.12);
-    if (e.key === "-" || e.key === "_") setZoom(zoom * 0.9);
-    if (e.key === "0") fitAll();
-    if (e.key === "Escape" && selectedId) {
-      selectedId = "";
-      paintCards();
-    }
+  wall?.addEventListener("keydown", (e) => {
+    if (e.target !== wall) return;
+    if (e.key === "+" || e.key === "=") setZoom(zoom * 1.14);
+    else if (e.key === "-" || e.key === "_") setZoom(zoom * 0.88);
+    else if (e.key === "0") fitAll();
+    else if (e.key === "Escape") {
+      if (noteMode) setNoteMode(false);
+      else if (selectedId) selectCard("");
+    } else if (e.key === "ArrowRight") pan.x -= 60;
+    else if (e.key === "ArrowLeft") pan.x += 60;
+    else if (e.key === "ArrowDown") pan.y -= 60;
+    else if (e.key === "ArrowUp") pan.y += 60;
+    else return;
+    paintTransform();
   });
+
+  // 悬停一条绳：绳和两端的卡一起亮
+  const svg = $("#digLines");
+  const clearHot = () => {
+    if (!hoverLn) return;
+    svg?.querySelectorAll(".is-hot").forEach((n) => n.classList.remove("is-hot"));
+    document.querySelectorAll(".ev-card.is-hot").forEach((n) => n.classList.remove("is-hot"));
+    hoverLn = "";
+  };
+  svg?.addEventListener("mouseover", (e) => {
+    const id = e.target?.dataset?.ln;
+    if (!id || id === hoverLn) return;
+    clearHot();
+    hoverLn = id;
+    svg.querySelectorAll(`[data-ln="${id}"]`).forEach((n) => {
+      if (!n.classList.contains("hit")) n.classList.add("is-hot");
+    });
+  });
+  svg?.addEventListener("mouseleave", clearHot);
 }
 
 async function render() {
