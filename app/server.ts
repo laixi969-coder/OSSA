@@ -1,4 +1,18 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  clientIp,
+  clearSessionCookie,
+  issueCaptcha,
+  loginUser,
+  logoutUser,
+  rateLimited,
+  readSession,
+  registerUser,
+  sessionCookie,
+  workspacePath,
+} from "./auth";
 import {
   AGNES_BASE,
   AGNES_CHAT_MODEL,
@@ -6,6 +20,7 @@ import {
   EMPTY_SCAN,
   generateBrief,
   generateDraft,
+  humanLlmError,
   listRemoteModels,
   llmConfig,
   pingLlm,
@@ -19,8 +34,8 @@ import {
 
 const ROOT = join(import.meta.dir, "..");
 const PUBLIC = join(import.meta.dir, "public");
-const STORE = join(ROOT, "data", "store.json");
 const PORT = Number(process.env.PORT || 4319);
+const als = new AsyncLocalStorage<{ userId: string }>();
 
 type RssFeed = { id: string; name: string; url: string; enabled: boolean; group?: string };
 type Settings = {
@@ -192,8 +207,45 @@ function publicSettings(settings: Settings) {
   };
 }
 
+function emptyStore(): Store {
+  return {
+    settings: {
+      sixtyBase: "http://127.0.0.1:4399",
+      mustReadCount: 10,
+      refreshMinutes: 30,
+      lowFanFollowers: 10000,
+      lowFanLikes: 1000,
+      jinaEnabled: false,
+      redfoxKey: "",
+      agnesKey: "",
+      llmBaseUrl: AGNES_BASE,
+      llmModel: AGNES_CHAT_MODEL,
+      llmModels: FALLBACK_MODELS,
+      operatorName: "",
+      companyName: "内容组",
+      niche: "",
+      persona: "",
+      audience: "",
+      formats: ["short_video", "xhs", "wechat"],
+      rssFeeds: DEFAULT_FEEDS.map((f) => ({ ...f })),
+      creators: [],
+    },
+    pins: [],
+    tasks: [],
+    themes: [],
+  };
+}
+
 async function readStore(): Promise<Store> {
-  const store = JSON.parse(await Bun.file(STORE).text()) as Store;
+  const userId = als.getStore()?.userId;
+  if (!userId) throw new Error("先登录");
+  const file = workspacePath(userId);
+  if (!(await Bun.file(file).exists())) {
+    const blank = emptyStore();
+    await writeStore(blank);
+    return blank;
+  }
+  const store = JSON.parse(await Bun.file(file).text()) as Store;
   store.settings.operatorName = store.settings.operatorName || "";
   store.settings.companyName = store.settings.companyName || "内容组";
   store.settings.agnesKey = store.settings.agnesKey || store.settings.xaiKey || "";
@@ -222,7 +274,21 @@ async function readStore(): Promise<Store> {
 }
 
 async function writeStore(store: Store) {
-  await Bun.write(STORE, JSON.stringify(store, null, 2));
+  const userId = als.getStore()?.userId;
+  if (!userId) throw new Error("先登录");
+  await mkdir(join(ROOT, "data", "workspaces"), { recursive: true });
+  await Bun.write(workspacePath(userId), JSON.stringify(store, null, 2));
+}
+
+function withSec(res: Response, extra: Record<string, string> = {}) {
+  const headers = new Headers(res.headers);
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("Referrer-Policy", "same-origin");
+  headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  headers.set("Cache-Control", headers.get("Cache-Control") || "no-store");
+  for (const [k, v] of Object.entries(extra)) headers.set(k, v);
+  return new Response(res.body, { status: res.status, headers });
 }
 
 function json(data: unknown, status = 200) {
@@ -427,6 +493,8 @@ type SignalItem = {
   origin?: InspirationOrigin;
   originLabel?: string;
   matchedTheme?: string;
+  matchedDomain?: string;
+  execOpen?: string;
 };
 
 function whyDo(kind: string) {
@@ -446,6 +514,8 @@ function whyDo(kind: string) {
     github: { why: "开源圈今天涨得快，适合点评或试用", do: "评测" },
     product: { why: "新品上架，适合做首发体验", do: "评测" },
     evergreen: { why: "不靠热搜也能开工，靠你看见了什么、被问了什么", do: "常青" },
+    node: { why: "日子到了，内容会挤在这一天", do: "节点" },
+    user: { why: "你订阅的源更新了", do: "订阅" },
   };
   return map[kind] || { why: "值得看一眼，再决定做不做", do: "先看" };
 }
@@ -459,18 +529,130 @@ const ORIGIN_LABEL: Record<InspirationOrigin, string> = {
   custom: "自己说的",
 };
 
-const EVERGREEN: Array<{ title: string; summary: string; do: string; why: string }> = [
-  { title: "把今天亲眼看到的一件事讲清楚", summary: "你在场，别人不在场。不需要热搜来授权。", do: "现场", why: "没流量也能做，靠你看见了什么" },
-  { title: "回答那个被问了十遍的问题", summary: "私信、评论、当面反复出现的，就是常青题。", do: "答疑", why: "搜索和提问比热搜更稳" },
-  { title: "把一次做砸的事写成对照", summary: "失败比成功好拍，因为代价是具体的。", do: "复盘", why: "对照比口号有画面" },
-  { title: "把一个默认说法反过来讲", summary: "行业里人人都这么说的那句，往往经不起追问。", do: "反常识", why: "反转本身就是切口" },
-  { title: "拆一条别人刚做成的案例，只拆方法不跟热度", summary: "学结构，不学热搜。", do: "拆方法", why: "方法可迁移，热度不可复制" },
-  { title: "做一次前后对比实验，把过程公开", summary: "同一件事，改一个变量，拍下结果。", do: "实验", why: "过程比结论更可跟" },
-  { title: "把一个专业动作拆成外行人能跟的步骤", summary: "你会的那一步，别人卡在门口。", do: "教程", why: "步骤本身就是内容" },
-  { title: "把一句客户原话扩成一篇或一条", summary: "原话比你编的人设更真。", do: "原话", why: "证据在对方嘴里" },
-  { title: "写给三年前的自己：当时最容易走错的那一步", summary: "一封信，一个坑，一个补救。", do: "书信", why: "时间差就是戏剧" },
-  { title: "同一件事，短视频、小红书、公众号三种写法", summary: "不是三个身份，是同一份活的三种格式。", do: "改写", why: "格式跟这份活走，不跟人设走" },
+const CONTENT_NODES: Array<{ date: string; title: string; why: string; do: string }> = [
+  { date: "2026-09-01", title: "开学季", why: "家长、学生、老师三条线都能做，不必只卖文具。", do: "节点" },
+  { date: "2026-09-10", title: "教师节", why: "感谢和吐槽都有市场，适合做关系题。", do: "节点" },
+  { date: "2026-09-23", title: "秋分", why: "换季、作息、饮食，生活向常青能挂在日子上。", do: "节点" },
+  { date: "2026-09-25", title: "中秋", why: "团圆、缺席、礼盒，品牌和创作者都会挤这一天。", do: "节点" },
+  { date: "2026-10-01", title: "国庆长假", why: "出行、回家、不想动，三种现场都能拍。", do: "节点" },
+  { date: "2026-10-31", title: "万圣节", why: "年轻向、妆造、店头，不是所有人的题。", do: "节点" },
+  { date: "2026-11-11", title: "双11", why: "买、不买、后悔买，消费题的高峰。", do: "节点" },
+  { date: "2026-11-27", title: "感恩节", why: "跨境和进口品牌会做，本土可借「致谢」不借火鸡。", do: "节点" },
+  { date: "2026-12-12", title: "双12", why: "双11的补刀，适合做「还要不要买」。", do: "节点" },
+  { date: "2026-12-22", title: "冬至", why: "吃和回家，南北不同，适合做对照。", do: "节点" },
+  { date: "2026-12-24", title: "平安夜 / 圣诞", why: "空气里有仪式感，创作者容易空转成装饰。", do: "节点" },
+  { date: "2026-12-31", title: "跨年", why: "年终复盘和愿望清单会扎堆，要有自己的一句。", do: "节点" },
+  { date: "2027-01-01", title: "元旦", why: "新的一年第一天，适合短、具体、能做的一件事。", do: "节点" },
+  { date: "2027-02-06", title: "春节", why: "回家、不回家、钱和饭桌，是一年最大的内容场。", do: "节点" },
+  { date: "2027-02-14", title: "情人节", why: "情侣、单身、已婚三条线，不要做成广告。", do: "节点" },
+  { date: "2027-03-08", title: "妇女节", why: "礼物之外，更适合做工作和身体的实话。", do: "节点" },
+  { date: "2027-04-05", title: "清明", why: "记忆和缺席，轻做，不要消费别人的丧。", do: "节点" },
+  { date: "2027-05-01", title: "劳动节", why: "休息、加班、谁在放假，现场比口号好拍。", do: "节点" },
+  { date: "2027-05-04", title: "青年节", why: "年龄焦虑和志气，容易空。要有具体的人。", do: "节点" },
+  { date: "2027-06-01", title: "儿童节", why: "孩子和曾经是孩子的人，两条受众。", do: "节点" },
+  { date: "2027-06-09", title: "端午", why: "粽子之外是地方和家人，适合做对照。", do: "节点" },
+  { date: "2027-06-20", title: "父亲节", why: "缺席的父亲也是题，注意分寸。", do: "节点" },
+  { date: "2027-08-25", title: "七夕", why: "中国的情人节，但更适合做「关系」而不是玫瑰。", do: "节点" },
 ];
+
+function upcomingNodes(withinDays = 60) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const from = start.getTime();
+  const to = from + withinDays * 86400000;
+  return CONTENT_NODES.filter((n) => {
+    const t = Date.parse(n.date + "T00:00:00");
+    return t >= from && t <= to;
+  }).map((n) => {
+    const t = Date.parse(n.date + "T00:00:00");
+    const days = Math.round((t - from) / 86400000);
+    const when = days === 0 ? "就是今天" : days === 1 ? "明天" : `${days} 天后`;
+    return stamp("node", {
+      id: `node:${n.date}:${n.title}`,
+      rank: 0,
+      title: n.title,
+      url: "",
+      summary: `${n.date} · ${when}。${n.why}`,
+      cover: "",
+      heat: 0,
+      source: "节点",
+      publishedAt: n.date,
+      why: n.why,
+      do: n.do,
+    });
+  });
+}
+
+const EVERGREEN: Array<{ title: string; open: string; do: string; why: string }> = [
+  { title: "今天我看见的这件事，别人不在场", open: "我在现场。下面只讲我看见的，不讲热搜授权过的。", do: "现场", why: "没流量也能做，靠你看见了什么" },
+  { title: "那个被问了十遍的问题，今天一次答完", open: "这个问题我被问了十遍。今天只答一次，你听完就能用。", do: "答疑", why: "搜索和提问比热搜更稳" },
+  { title: "我把一次做砸的事写成对照", open: "上次我把这件事做砸了。对照今天，代价是具体的。", do: "复盘", why: "对照比口号有画面" },
+  { title: "行业人人都这么说，我反过来讲", open: "这句默认的话我先不信。反过来讲，经不经得起追问你自己听。", do: "反常识", why: "反转本身就是切口" },
+  { title: "别人刚做成的，我只拆这一处", open: "我不跟热度。别人做成了，我只拆能搬走的那一处结构。", do: "拆方法", why: "方法可迁移，热度不可复制" },
+  { title: "我改一个变量，把前后结果拍给你看", open: "同一件事，我只改一个变量。过程比结论更可跟。", do: "实验", why: "过程比结论更可跟" },
+  { title: "你会的那一步，我拆成外人能跟的", open: "卡在门口的人不是笨，是没人把这一步拆开。我拆给你。", do: "教程", why: "步骤本身就是内容" },
+  { title: "客户原话说完，我只往下扩这一句", open: "这句话不是我编的。原话在先，我只往下扩你听得懂的部分。", do: "原话", why: "证据在对方嘴里" },
+  { title: "写给三年前的自己：最容易走错的那一步", open: "三年前的我，最容易在这一步走错。今天只写这一步，和一个补救。", do: "书信", why: "时间差就是戏剧" },
+  { title: "同一件事，我写成短视频、小红书、公众号三版", open: "不是三个身份。同一件事，三种格式，你对号拿走。", do: "改写", why: "格式跟这份活走，不跟人设走" },
+];
+
+function firstSentence(text: string, max = 36) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  const cut = t.match(/^.{8,40}?[。！？!?]/);
+  if (cut) return cut[0].replace(/^[“"']|[”"']$/g, "").trim();
+  return t.slice(0, max).trim();
+}
+
+function withDomainSlot(text: string, domain: string) {
+  if (!domain) return text;
+  if (text.includes("这件事") || text.includes("这个问题") || text.includes("这一处") || text.includes("这一步")) {
+    return text
+      .replace("这件事", `「${domain}」这件事`)
+      .replace("这个问题", `「${domain}」这个问题`)
+      .replace("这一处", `「${domain}」这一处`)
+      .replace("那一处", `「${domain}」那一处`)
+      .replace("这一步", `「${domain}」这一步`);
+  }
+  return text;
+}
+
+function toExecutable(item: SignalItem, origin: InspirationOrigin, domains: string[] = []): { title: string; open: string } {
+  const domain = domains[0] || "";
+  const rawTitle = String(item.title || "").trim();
+  const rawOpen = String(item.execOpen || "").trim();
+  if (origin === "evergreen") {
+    return { title: withDomainSlot(rawTitle, domain), open: withDomainSlot(rawOpen || String(item.why || ""), domain) };
+  }
+  if (origin === "hot") {
+    const short = rawTitle.length > 22 ? rawTitle.slice(0, 22) : rawTitle;
+    return {
+      title: `这件事我只讲一句：${short}`,
+      open: `先别刷评论。开口就说：${short}。听完你就能用，我不复述榜单。`,
+    };
+  }
+  if (origin === "case") {
+    const bit = firstSentence(item.summary, 28) || rawTitle.slice(0, 28);
+    return {
+      title: `只拆这一处：${rawTitle.length > 18 ? rawTitle.slice(0, 18) : rawTitle}`,
+      open: `别人已经做成了。我只搬结构，不搬热度。原文是：${bit}`,
+    };
+  }
+  if (origin === "node") {
+    return {
+      title: rawTitle.includes("今天") || rawTitle.includes("天后") ? rawTitle : `${rawTitle}，我提前把内容占上`,
+      open: firstSentence(item.summary || item.why || "", 40) || `${rawTitle}会挤在同一天。我提前拍，不跟那天的人挤。`,
+    };
+  }
+  if (origin === "custom") {
+    return { title: rawTitle, open: rawOpen || firstSentence(item.summary, 40) || rawTitle };
+  }
+  const lead = firstSentence(item.summary, 32);
+  return {
+    title: rawTitle,
+    open: lead ? `今天这条，我只讲你会用到的一句：${lead}` : `今天这条我只讲一句：${rawTitle}。听完就能用。`,
+  };
+}
 
 function markOrigin(items: SignalItem[], origin: InspirationOrigin): SignalItem[] {
   return items.map((item) => ({ ...item, origin, originLabel: ORIGIN_LABEL[origin] }));
@@ -505,17 +687,44 @@ function withThemeMatch(items: SignalItem[], groups: ReturnType<typeof themeGrou
   }));
 }
 
-function oneLiner(item: SignalItem) {
-  const hit = item.matchedTheme ? `和长期主题「${item.matchedTheme}」有关。` : "";
-  if (item.origin === "evergreen" && item.why) return hit + item.why;
-  const sum = (item.summary || "").replace(/\s+/g, " ").trim();
-  if (sum.length >= 8) return (hit + sum).slice(0, 100);
-  if (item.origin === "hot") {
-    const short = (item.title || "").slice(0, 16);
-    return `${hit}热搜在谈「${short}」。热闹不等于选题。`;
+function parseDomainNeedles(niche: string, themes: Theme[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (raw: string) => {
+    const t = String(raw || "").trim();
+    if (t.length < 2 || out.length >= 3) return;
+    const key = t.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(t);
+  };
+  String(niche || "")
+    .split(/[\s，,。、·/|;]+/)
+    .forEach(push);
+  for (const th of themes || []) {
+    if (th.status === "paused") continue;
+    push(th.title);
   }
-  if (hit) return hit + "看完再决定做不做。";
-  return item.why || "还没有长期主题，这条先按它本身值不值得看。";
+  return out;
+}
+
+function matchDomain(text: string, domains: string[]): string {
+  if (!domains.length) return "";
+  const hay = text.toLowerCase();
+  for (const d of domains) {
+    if (hay.includes(d.toLowerCase())) return d;
+  }
+  return "";
+}
+
+function withDomainMatch(items: SignalItem[], domains: string[]): SignalItem[] {
+  if (!domains.length) return items;
+  return items
+    .map((item) => ({
+      ...item,
+      matchedDomain: matchDomain(`${item.title} ${item.summary || ""} ${item.source || ""}`, domains),
+    }))
+    .sort((a, b) => Number(Boolean(b.matchedDomain)) - Number(Boolean(a.matchedDomain)));
 }
 
 function pickEvergreen(n: number, batch = 0): SignalItem[] {
@@ -540,12 +749,14 @@ function pickEvergreen(n: number, batch = 0): SignalItem[] {
         publishedAt: "",
         why: row.why,
         do: row.do,
+        execOpen: row.open,
+        summary: row.open,
       }),
     );
   }
   return markOrigin(out, "evergreen").map((item) => {
     const row = EVERGREEN.find((x) => x.title === item.title);
-    return row ? { ...item, why: row.why, do: row.do } : item;
+    return row ? { ...item, why: row.why, do: row.do, execOpen: row.open, summary: row.open } : item;
   });
 }
 
@@ -553,6 +764,7 @@ function mixInspirations(
   pools: Array<{ origin: InspirationOrigin; items: SignalItem[]; cap: number }>,
   want: number,
   batch = 0,
+  domains: string[] = [],
 ): SignalItem[] {
   const used = new Set<string>();
   const out: SignalItem[] = [];
@@ -562,11 +774,15 @@ function mixInspirations(
     const key = keyOf(item.title);
     if (used.has(key)) return;
     used.add(key);
+    const exec = toExecutable({ ...item, origin }, origin, domains);
     out.push({
       ...item,
       origin,
       originLabel: ORIGIN_LABEL[origin],
-      why: oneLiner({ ...item, origin }),
+      title: exec.title,
+      execOpen: exec.open,
+      why: exec.open,
+      summary: item.summary || item.title,
     });
   };
   pickEvergreen(2, batch).forEach((item) => take(item, "evergreen"));
@@ -709,26 +925,40 @@ async function aihotItems() {
   }
 }
 
+function rssKind(group?: string) {
+  if (group === "open") return "product";
+  if (group === "tech") return "tech";
+  if (group === "marketing") return "marketing";
+  return "user";
+}
+
 async function rssItems(store: Store, group?: string) {
-  const feeds = store.settings.rssFeeds.filter(
-    (f) => f.enabled && f.url && (!group || f.group === group),
-  );
+  const feeds = store.settings.rssFeeds.filter((f) => {
+    if (!f.enabled || !f.url) return false;
+    if (!group) return true;
+    if (group === "subscribe") return (f.group || "user") !== "marketing";
+    return f.group === group;
+  });
   if (!feeds.length) {
     return {
       ok: false,
-      error: "先贴数英 https://www.digitaling.com/rss",
+      error:
+        group === "subscribe"
+          ? "去数据引擎贴你自己领域的 RSS。美妆贴美妆源，地产贴地产源。"
+          : "先贴数英 https://www.digitaling.com/rss",
       items: [] as unknown[],
     };
   }
   const settled = await Promise.all(
     feeds.map(async (feed) => {
       const r = await fetchJson(feed.url, 15000);
-      if (!r.ok) return { feed: feed.name, items: [] as ReturnType<typeof parseRss> };
-      return { feed: feed.name, items: parseRss(r.body, feed.name) };
+      if (!r.ok) return { feed, items: [] as ReturnType<typeof parseRss> };
+      return { feed, items: parseRss(r.body, feed.name) };
     }),
   );
-  const kind = group === "open" ? "product" : group === "tech" ? "tech" : "marketing";
-  let items = settled.flatMap((s) => s.items.map((it) => stamp(kind, it as SignalItem)));
+  let items = settled.flatMap((s) =>
+    s.items.map((it) => stamp(rssKind(s.feed.group), it as SignalItem)),
+  );
   items = items.filter((it) => !isJobListing(it));
   if (group === "marketing") {
     items = items
@@ -742,7 +972,9 @@ async function rssItems(store: Store, group?: string) {
       error:
         group === "marketing"
           ? "今天的营销源里没有可看的案例或文章。招聘信息不会放进来。"
-          : "RSS 源还在，只是今天还没拉到稿。去数据引擎测一下连通。",
+          : group === "subscribe"
+            ? "订阅源还在，只是今天还没拉到稿。去数据引擎测一下连通。"
+            : "RSS 源还在，只是今天还没拉到稿。去数据引擎测一下连通。",
       items: [],
     };
   }
@@ -777,18 +1009,93 @@ function publicOrigin(req: Request) {
 async function staticFile(pathname: string) {
   const rel = pathname === "/" ? "/index.html" : pathname;
   const file = Bun.file(join(PUBLIC, rel));
-  if (!(await file.exists())) return new Response("Not found", { status: 404 });
+  if (!(await file.exists())) {
+    return new Response("没有这个页面。OSSA 不收钱，也没有结账。", {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
   const ext = rel.split(".").pop() || "html";
   const headers: Record<string, string> = { "Content-Type": MIME[ext] || "application/octet-stream" };
   if (ext === "js" || ext === "css" || ext === "html") headers["Cache-Control"] = "no-store";
+  else if (ext === "jpg" || ext === "jpeg" || ext === "png" || ext === "webp" || ext === "svg") {
+    headers["Cache-Control"] = "public, max-age=86400";
+  }
   return new Response(file, { headers });
+}
+
+function readAuthBody(body: Record<string, unknown>) {
+  return {
+    email: String(body.email || ""),
+    password: String(body.password || ""),
+    captchaId: String(body.captchaId || ""),
+    captchaAnswer: String(body.captchaAnswer || ""),
+    honeypot: String(body.website || body.company_url || ""),
+    startedAt: Number(body.startedAt || 0),
+  };
+}
+
+async function handleAuth(req: Request, url: URL, ip: string) {
+  const path = url.pathname;
+  if (path === "/api/auth/captcha" && req.method === "GET") {
+    const cap = issueCaptcha();
+    return json({ ok: true, id: cap.id, svg: cap.svg, startedAt: Date.now() });
+  }
+  if (path === "/api/auth/me" && req.method === "GET") {
+    const session = await readSession(req);
+    return json({ ok: Boolean(session), user: session?.user || null });
+  }
+  if (path === "/api/auth/register" && req.method === "POST") {
+    const result = await registerUser(readAuthBody((await req.json().catch(() => ({}))) as Record<string, unknown>));
+    if (!result.ok) return json({ ok: false, error: result.error }, 400);
+    return withSec(json({ ok: true, user: result.user }), { "Set-Cookie": sessionCookie(result.sessionId, req) });
+  }
+  if (path === "/api/auth/login" && req.method === "POST") {
+    const result = await loginUser(readAuthBody((await req.json().catch(() => ({}))) as Record<string, unknown>));
+    if (!result.ok) return json({ ok: false, error: result.error }, 400);
+    return withSec(json({ ok: true, user: result.user }), { "Set-Cookie": sessionCookie(result.sessionId, req) });
+  }
+  if (path === "/api/auth/logout" && req.method === "POST") {
+    await logoutUser(req);
+    return withSec(json({ ok: true }), { "Set-Cookie": clearSessionCookie(req) });
+  }
+  return json({ error: "unknown" }, 404);
 }
 
 Bun.serve({
   port: PORT,
   hostname: "127.0.0.1",
+  maxRequestBodySize: 1_500_000,
   async fetch(req) {
     const url = new URL(req.url);
+    const path = url.pathname;
+    const ip = clientIp(req);
+    const limited = rateLimited(ip, path);
+    if (!limited.ok) {
+      return withSec(json({ ok: false, error: "试得太勤，请稍后再试" }, 429), {
+        "Retry-After": String(limited.retryAfter || 60),
+      });
+    }
+
+    if (path.startsWith("/api/auth/")) return withSec(await handleAuth(req, url, ip));
+
+    if (path.startsWith("/api/") && path !== "/api/img") {
+      const session = await readSession(req);
+      if (!session) return withSec(json({ ok: false, error: "先登录", code: "auth" }, 401));
+      return als.run({ userId: session.user.id }, async () => withSec(await dispatch(req, url)));
+    }
+
+    if (path === "/api/img") {
+      const session = await readSession(req);
+      if (!session) return withSec(json({ ok: false, error: "先登录", code: "auth" }, 401));
+      return als.run({ userId: session.user.id }, async () => withSec(await dispatch(req, url)));
+    }
+
+    return withSec(await dispatch(req, url));
+  },
+});
+
+async function dispatch(req: Request, url: URL) {
     const path = url.pathname;
 
     try {
@@ -800,6 +1107,7 @@ Allow: /llms.txt
 Allow: /og.jpg
 Allow: /styles.css
 Allow: /sitemap.xml
+Disallow: /
 Disallow: /api/
 Disallow: /data/
 
@@ -952,7 +1260,13 @@ Sitemap: ${origin}/sitemap.xml
       if (path === "/api/rss") {
         const store = await readStore();
         const group = url.searchParams.get("group") || undefined;
-        return json(await rssItems(store, group));
+        const data = await rssItems(store, group);
+        const domains = parseDomainNeedles(store.settings.niche, store.themes || []);
+        return json({
+          ...data,
+          items: withDomainMatch((data.items || []) as SignalItem[], domains),
+          domains,
+        });
       }
 
       if (path === "/api/open") {
@@ -997,6 +1311,53 @@ Sitemap: ${origin}/sitemap.xml
         });
       }
 
+      if (path === "/api/nodes") {
+        const items = upcomingNodes(60).map((item) => {
+          const row = CONTENT_NODES.find((n) => item.id.includes(n.date) && item.id.includes(n.title));
+          return row ? { ...item, why: row.why, do: row.do } : item;
+        });
+        return json({
+          ok: true,
+          items,
+          error: items.length ? "" : "近两个月没有大节点，先做常青。",
+        });
+      }
+
+      if (path === "/api/subscribe") {
+        const store = await readStore();
+        const [aihot, own, extra] = await Promise.all([
+          aihotItems(),
+          rssItems(store, "subscribe"),
+          (async () => {
+            const [gh, hnRaw] = await Promise.all([
+              githubTrending(),
+              sixty(store, "/v2/hacker-news/top"),
+            ]);
+            let hn: SignalItem[] = [];
+            if (hnRaw.ok) {
+              try {
+                hn = mapHot("hacker-news", JSON.parse(hnRaw.body)).items;
+              } catch {
+                hn = [];
+              }
+            }
+            return [...gh.items, ...hn];
+          })(),
+        ]);
+        const items = [...(own.items || []), ...(aihot.items || []), ...extra];
+        const domains = parseDomainNeedles(store.settings.niche, store.themes || []);
+        return json({
+          ok: items.length > 0,
+          error: items.length
+            ? ""
+            : domains.length
+              ? `订阅还是空的。当前领域「${domains.join("、")}」，去数据引擎贴这个领域的 RSS。`
+              : "订阅还是空的。去数据引擎贴你自己领域的 RSS。",
+          items: withDomainMatch(items, domains),
+          domains,
+        });
+      }
+
       if (path === "/api/home") {
         const store = await readStore();
         const batch = Math.max(0, Number(url.searchParams.get("batch") || 0) || 0);
@@ -1020,6 +1381,7 @@ Sitemap: ${origin}/sitemap.xml
         const wantRaw = Number(store.settings.mustReadCount || 10);
         const want = wantRaw >= 8 && wantRaw <= 10 ? wantRaw : 10;
         const groups = themeGroups(store.themes || []);
+        const domains = parseDomainNeedles(store.settings.niche, store.themes || []);
         const cleanHot = (items: SignalItem[]) => {
           let next = items.filter((it) => !skipAsHomeHot(it.title));
           if (groups.length) {
@@ -1044,11 +1406,14 @@ Sitemap: ${origin}/sitemap.xml
           }
         }
         secondaryHot.slice(1).forEach((it) => hotPool.push(it));
-        const cases = withThemeMatch(markOrigin(rss.items, "case"), groups).sort(
-          (a, b) => Number(Boolean(b.matchedTheme)) - Number(Boolean(a.matchedTheme)),
+        const cases = withDomainMatch(
+          withThemeMatch(markOrigin(rss.items, "case"), groups).sort(
+            (a, b) => Number(Boolean(b.matchedTheme)) - Number(Boolean(a.matchedTheme)),
+          ),
+          domains,
         );
-        const news = withThemeMatch(markOrigin(aihot.items, "news"), groups);
-        const hots = withThemeMatch(markOrigin(hotPool, "hot"), groups);
+        const news = withDomainMatch(withThemeMatch(markOrigin(aihot.items, "news"), groups), domains);
+        const hots = withDomainMatch(withThemeMatch(markOrigin(hotPool, "hot"), groups), domains);
         const inspirations = mixInspirations(
           [
             { origin: "hot", items: hots, cap: 4 },
@@ -1057,9 +1422,10 @@ Sitemap: ${origin}/sitemap.xml
           ],
           want,
           batch,
+          domains,
         ).map((item) => ({
           ...item,
-          line: `${item.originLabel || ORIGIN_LABEL[item.origin || "evergreen"]} · ${item.do || ""}`,
+          line: `可直接发 · ${item.originLabel || ORIGIN_LABEL[item.origin || "evergreen"]}`,
         }));
 
         const OPEN = new Set(["judge", "need_evidence", "adopted", "making"]);
@@ -1097,6 +1463,8 @@ Sitemap: ${origin}/sitemap.xml
           pins: store.pins.slice(0, 5),
           themes: (store.themes || []).filter((t) => t.status !== "paused").slice(0, 8),
           themeFilterOn: groups.length > 0,
+          domains,
+          domainFilterOn: domains.length > 0,
           weiboOk,
           aihotOk: aihot.ok,
           rssOk: rss.ok,
@@ -1265,7 +1633,7 @@ Sitemap: ${origin}/sitemap.xml
               priorTitles,
             });
           } catch (err) {
-            briefError = err instanceof Error ? err.message : "选题生成失败";
+            briefError = humanLlmError(err);
             brief.noSignal = true;
             brief.noSignalReason = briefError;
           }
@@ -1343,8 +1711,7 @@ Sitemap: ${origin}/sitemap.xml
           await writeStore(store);
           return json({ ok: true, task: store.tasks.find((t) => t.id === id) });
         } catch (err) {
-          const message = err instanceof Error ? err.message : "拍法和稿生成失败";
-          return json({ ok: false, error: message }, 500);
+          return json({ ok: false, error: humanLlmError(err) }, 500);
         }
       }
 
@@ -1398,7 +1765,6 @@ Sitemap: ${origin}/sitemap.xml
       const message = err instanceof Error ? err.message : "server error";
       return json({ ok: false, error: message }, 500);
     }
-  },
-});
+}
 
 console.log(`OSSA Media OS  http://127.0.0.1:${PORT}`);

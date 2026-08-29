@@ -18,13 +18,31 @@ function toast(text) {
   setTimeout(() => toastEl.classList.remove("show"), 2800);
 }
 
+function friendlyError(text) {
+  const s = String(text || "");
+  if (/JSON Parse|Unexpected token|Unrecognized token|not valid JSON/i.test(s)) {
+    return "模型这次没按结构交稿，再点一次「选这个」。";
+  }
+  return s;
+}
+
+let currentUser = null;
+let gateMode = "login";
+let captcha = { id: "", svg: "", startedAt: 0 };
+
 async function api(path, opts) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     ...opts,
   });
   const data = await res.json().catch(() => ({}));
+  if (data.error) data.error = friendlyError(data.error);
   if (!res.ok && !data.error) data.error = "请求失败";
+  if (res.status === 401 && data.code === "auth" && !String(path).startsWith("/api/auth/")) {
+    currentUser = null;
+    renderGate();
+  }
   return data;
 }
 
@@ -129,6 +147,10 @@ const STAGE_PLATFORMS = [
   { id: "douyin", name: "抖音" },
   { id: "bili", name: "B站" },
 ];
+const TALK_PLATFORMS = [
+  { id: "zhihu", name: "知乎" },
+  { id: "weibo", name: "微博" },
+];
 
 function actionsHtml(item) {
   const open = item.url
@@ -193,7 +215,7 @@ async function renderHot(tab) {
         <div class="pad">
         <div class="line">${esc(item.line || item.originLabel || item.do || "")}</div>
         <h3>${esc(item.title)}</h3>
-        <p>${esc(item.why || (item.summary || "").slice(0, 90))}</p>
+        <p>${esc(item.execOpen || item.why || (item.summary || "").slice(0, 90))}</p>
         ${actionsHtml(item)}
         </div>
       </article>`,
@@ -202,11 +224,11 @@ async function renderHot(tab) {
 
   const tabs = [
     ["platform", "平台热榜"],
-    ["ai", "AI 快报"],
-    ["marketing", "营销情报"],
-    ["tech", "科技圈"],
-    ["open", "开源新品"],
-    ["creators", "对标账号"],
+    ["cases", "案例"],
+    ["talk", "讨论"],
+    ["nodes", "节点"],
+    ["subscribe", "订阅"],
+    ["creators", "对标"],
   ]
     .map(
       ([id, name]) =>
@@ -229,7 +251,13 @@ async function renderHot(tab) {
       <input id="startLine" name="line" maxlength="120" placeholder="一句话开工，不必从热搜里长出来" autocomplete="off" />
       <button class="btn" type="submit">开工</button>
     </form>
-    <div class="section-label">今日选题池${home.themeFilterOn ? " · 已按长期主题筛过热搜" : ""}</div>
+    <div class="section-label">今日选题池${
+      home.domainFilterOn
+        ? ` · 已按领域「${esc((home.domains || []).join("、"))}」偏过`
+        : home.themeFilterOn
+          ? " · 已按长期主题筛过热搜"
+          : ""
+    }</div>
     <div class="must">${must || `<div class="empty"><p>${esc(home.coldStart)}</p></div>`}</div>
     ${pins ? `<div class="section-label">最近钉过的借鉴</div><div class="pins">${pins}</div>` : ""}
     <div class="section-label">原料货架 · 点开再看，热搜不是进门画面</div>
@@ -254,22 +282,24 @@ async function renderTab(tab) {
   const pane = $("#pane");
   if (!pane) return;
   if (!tab) {
-    pane.innerHTML = `<div class="empty"><h2>原料先收着</h2><p>先在上面选一张，或写一句话开工。热搜、快报、案例点开对应的格再看。</p></div>`;
+    pane.innerHTML = `<div class="empty"><h2>原料先收着</h2><p>先在上面选一张，或写一句话开工。货架按怎么逛来切：舞台、案例、讨论、节点、订阅、对标。不按美妆、职场、地产开格子——你的领域贴进订阅和对标，或种成长期主题。</p></div>`;
     return;
   }
   if (tab === "platform") return renderPlatform(pane);
-  if (tab === "ai") return renderAi(pane);
-  if (tab === "marketing") return renderRss(pane);
-  if (tab === "tech") return renderBundle(pane, "/api/tech", "科技圈暂时拉不到");
-  if (tab === "open") return renderBundle(pane, "/api/open", "开源与新品暂时拉不到");
+  if (tab === "cases" || tab === "marketing") return renderRss(pane);
+  if (tab === "talk") return renderTalk(pane);
+  if (tab === "nodes") return renderNodes(pane);
+  if (tab === "subscribe" || tab === "ai" || tab === "tech" || tab === "open") {
+    return renderBundle(pane, "/api/subscribe", "订阅还是空的");
+  }
   if (tab === "creators") {
-    pane.innerHTML = `<div class="empty"><h2>先贴对标账号的主页链接</h2><p>没有官方公开接口。去数据引擎贴链接。读失败会标明，不会装成没更新。</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
+    pane.innerHTML = `<div class="empty"><h2>先贴对标账号的主页链接</h2><p>对标是你认的人，不是产品给你的行业榜。没有官方公开接口。去数据引擎贴链接。读失败会标明，不会装成没更新。</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
   }
 }
 
-async function renderPlatform(pane) {
-  pane.innerHTML = `<div class="hot-board">
-    ${STAGE_PLATFORMS.map(
+async function renderRankBoard(pane, platforms, two) {
+  pane.innerHTML = `<div class="hot-board${two ? " two" : ""}">
+    ${platforms.map(
       (p, i) => `<section class="col">
       <header><strong>${p.name}</strong><select id="col${i}">${PLATFORMS.map(
         (opt) => `<option value="${opt.id}" ${opt.id === p.id ? "selected" : ""}>${opt.name}</option>`,
@@ -307,10 +337,42 @@ async function renderPlatform(pane) {
       btn.addEventListener("click", () => plantTheme(items[Number(btn.dataset.plantI)]));
     });
   }
-  STAGE_PLATFORMS.forEach((_, i) => {
+  platforms.forEach((_, i) => {
     $(`#col${i}`).addEventListener("change", () => fill(`#col${i}`, `#list${i}`));
   });
-  await Promise.all(STAGE_PLATFORMS.map((_, i) => fill(`#col${i}`, `#list${i}`)));
+  await Promise.all(platforms.map((_, i) => fill(`#col${i}`, `#list${i}`)));
+}
+
+async function renderPlatform(pane) {
+  return renderRankBoard(pane, STAGE_PLATFORMS, false);
+}
+
+async function renderTalk(pane) {
+  return renderRankBoard(pane, TALK_PLATFORMS, true);
+}
+
+async function renderNodes(pane) {
+  pane.innerHTML = `<p style="color:var(--ink-3)">正在看接下来两个月的日子…</p>`;
+  const data = await api("/api/nodes");
+  const items = data.items || [];
+  if (!items.length) {
+    pane.innerHTML = `<div class="empty"><h2>近两个月没有大节点</h2><p>${esc(data.error || "先做常青。")}</p></div>`;
+    return;
+  }
+  pane.innerHTML = `<p class="muted" style="margin:0 0 12px">日子到了，内容会挤在这一天。不是爬来的新闻。</p><div class="cards"></div>`;
+  const grid = $(".cards", pane);
+  items.forEach((item) => {
+    const el = document.createElement("article");
+    el.className = "card";
+    el.innerHTML = `<div class="body">
+      <div class="src">${esc(item.do || "节点")} · ${esc((item.publishedAt || "").slice(0, 10))}</div>
+      <h3>${esc(item.title)}</h3>
+      <p>${esc(item.why || (item.summary || "").slice(0, 140))}</p>
+      ${actionsHtml(item)}
+    </div>`;
+    bindCard(el, item);
+    grid.appendChild(el);
+  });
 }
 
 async function renderAi(pane) {
@@ -340,10 +402,17 @@ async function renderBundle(pane, path, emptyText) {
   pane.innerHTML = `<p style="color:var(--ink-3)">正在拉…</p>`;
   const data = await api(path);
   if (!data.ok) {
-    pane.innerHTML = `<div class="empty"><h2>${esc(emptyText)}</h2><p>${esc(data.error || "")}</p></div>`;
+    pane.innerHTML = `<div class="empty"><h2>${esc(emptyText)}</h2><p>${esc(data.error || "")}</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
     return;
   }
-  pane.innerHTML = `<div class="cards"></div>`;
+  const domainHint = (data.domains || []).length
+    ? `当前领域「${esc(data.domains.join("、"))}」，撞上的排前面，没撞上的仍在。`
+    : "你贴的领域源排在前面。";
+  const intro =
+    path === "/api/subscribe"
+      ? `<p class="muted" style="margin:0 0 12px">你认的源。科技快报是冷启动填充，不是把你定义成科技创作者。${domainHint}</p>`
+      : "";
+  pane.innerHTML = `${intro}<div class="cards"></div>`;
   const grid = $(".cards", pane);
   data.items.forEach((item) => {
     const el = document.createElement("article");
@@ -361,13 +430,16 @@ async function renderBundle(pane, path, emptyText) {
 }
 
 async function renderRss(pane) {
-  pane.innerHTML = `<p style="color:var(--ink-3)">正在拉营销情报…</p>`;
+  pane.innerHTML = `<p style="color:var(--ink-3)">正在拉案例…</p>`;
   const data = await api("/api/rss?group=marketing");
   if (!data.ok) {
-    pane.innerHTML = `<div class="empty"><h2>营销情报还没稿</h2><p>${esc(data.error)}</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
+    pane.innerHTML = `<div class="empty"><h2>案例还没稿</h2><p>${esc(data.error)}</p><p>默认是营销圈成品。你领域的案例源去数据引擎贴，不要等产品开一格美妆或职场。</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
     return;
   }
-  pane.innerHTML = `<p class="muted" style="margin:0 0 12px">只看案例和文章。招聘、跳槽信息不进这一格。</p><div class="cards"></div>`;
+  const domainHint = (data.domains || []).length
+    ? `当前领域「${esc(data.domains.join("、"))}」，贴近的排前面。`
+    : "默认是营销圈；你领域的成品源去数据引擎贴。";
+  pane.innerHTML = `<p class="muted" style="margin:0 0 12px">别人刚做成的。招聘不进这一格。${domainHint}</p><div class="cards"></div>`;
   const grid = $(".cards", pane);
   data.items.forEach((item) => {
     const el = document.createElement("article");
@@ -407,18 +479,18 @@ async function renderEngine() {
         <p>开箱即用，不用填 key。连不上时 AI 快报会自己说。</p>
       </section>
       <section class="block">
-        <h2>营销 RSS</h2>
+        <h2>RSS 订阅</h2>
         <div class="field">
-          <label for="rss">每行一个：名字 | 地址。少数派 / 36氪 / IT之家 / V2EX / Product Hunt 已预置。</label>
+          <label for="rss">每行一个：名字 | 地址。你领域的源贴这里：美妆贴美妆，地产贴地产。营销圈案例进「案例」格，其余进「订阅」格。少数派 / 36氪 / IT之家 / V2EX / Product Hunt 已预置。</label>
           <textarea id="rss" rows="5">${esc(
             (s.rssFeeds || []).map((f) => `${f.name} | ${f.url}`).join("\n"),
           )}</textarea>
         </div>
       </section>
       <section class="block">
-        <h2>关注博主主页</h2>
+        <h2>对标主页</h2>
         <div class="field">
-          <label for="creators">每行一个链接。没有官方接口，第一版只收链接。</label>
+          <label for="creators">每行一个链接。贴你认的人，不是产品给你的行业榜。没有官方接口，第一版只收链接。</label>
           <textarea id="creators" rows="4">${esc((s.creators || []).map((c) => c.url).join("\n"))}</textarea>
         </div>
       </section>
@@ -426,7 +498,10 @@ async function renderEngine() {
         <h2>RedFox Key</h2>
         <div class="field">
           <label for="redfox">低粉高赞用。没有就留空。</label>
-          <input id="redfox" type="password" value="${esc(s.redfoxKey)}" autocomplete="off" />
+          <div class="pw-wrap">
+            <input id="redfox" type="password" value="${esc(s.redfoxKey)}" autocomplete="off" />
+            <button class="pw-toggle" type="button" id="redfoxEye">查看</button>
+          </div>
         </div>
       </section>
       <button class="btn" type="submit">保存</button>
@@ -458,7 +533,7 @@ async function renderEngine() {
           name: name || `源${i + 1}`,
           url: href,
           enabled: true,
-          group: old?.group || "marketing",
+          group: old?.group || "user",
         };
       });
     const creators = $("#creators")
@@ -477,6 +552,7 @@ async function renderEngine() {
     });
     toast("已保存");
   });
+  bindPasswordEye($("#redfox"), $("#redfoxEye"));
 }
 
 const FORMATS = [
@@ -486,6 +562,7 @@ const FORMATS = [
   ["short_drama", "短剧"],
   ["bilibili", "B站"],
   ["ad", "广告"],
+  ["live", "直播场次"],
 ];
 const FORMAT_NAME = Object.fromEntries(FORMATS);
 const RISK_NAME = { low: "低", mid: "中", high: "高" };
@@ -523,8 +600,8 @@ function ideaDetail(idea) {
     ${row("打中情绪", idea.emotion)}
     ${row("预设转发语", idea.shareLine)}
     ${row("平台与风格", [idea.platform, idea.style].filter(Boolean).join(" · "))}
-    ${titles ? `<p class="draft-k">拟定标题</p><ol class="title-list">${titles}</ol>` : ""}
-    ${hooks ? `<p class="draft-k">口播 / Hook</p><ol class="title-list">${hooks}</ol>` : ""}
+    ${titles ? `<p class="draft-k">可直接发的标题</p><ol class="title-list">${titles}</ol>` : ""}
+    ${hooks ? `<p class="draft-k">可直接念的开头</p><ol class="title-list">${hooks}</ol>` : ""}
     ${row("可拍画面 / 象征细节", idea.shot)}
     ${row("和我们的关系", idea.whyUs)}
     ${row("赌注", idea.bet)}${idea.riskReason ? row("风险", idea.riskReason) : ""}
@@ -552,15 +629,15 @@ function draftHtml(pack) {
   const tags = (pack.write?.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("");
   return `<div class="draft-grid">
     <section class="block">
-      <h2>如何拍</h2>
+      <h2>如何拍（可直接照搬）</h2>
       <p class="draft-k">开头 / 钩子</p><p>${esc(pack.shoot?.hook || "")}</p>
       <p class="draft-k">结构</p><p>${esc(pack.shoot?.structure || "")}</p>
       <p class="draft-k">结尾</p><p>${esc(pack.shoot?.ending || "")}</p>
       ${pack.shoot?.shots ? `<p class="draft-k">画面</p><p>${esc(pack.shoot.shots)}</p>` : ""}
     </section>
     <section class="block">
-      <h2>如何写</h2>
-      ${titles ? `<p class="draft-k">备选标题</p><ol class="title-list">${titles}</ol>` : ""}
+      <h2>如何写（可直接照搬）</h2>
+      ${titles ? `<p class="draft-k">可直接发的标题</p><ol class="title-list">${titles}</ol>` : ""}
       <p class="draft-k">开头</p><p>${esc(pack.write?.opening || "")}</p>
       <p class="draft-k">正文 / 口播</p><pre class="draft-body">${esc(pack.write?.body || "")}</pre>
       ${tags ? `<div class="tags">${tags}</div>` : ""}
@@ -590,7 +667,7 @@ async function renderTopic(id) {
     <h1 class="mast" style="font-size:28px">${esc(t.title)}</h1>
     <p class="sub">${esc(t.by || "未署名")} · 来自「${esc(t.signal?.title || t.fromTitle || "")}」</p>
     <div class="banner ${situationFilled(s) ? "" : ""}">${esc(sitLine)}</div>
-    ${t.error ? `<div class="banner warn">${esc(t.error)}</div>` : ""}
+    ${t.error ? `<div class="banner warn">${esc(friendlyError(t.error))}</div>` : ""}
 
     <section class="block">
       <h2>这份活从哪来</h2>
@@ -627,7 +704,7 @@ async function renderTopic(id) {
 
     <section class="block">
       <h2>如何拍 / 如何写</h2>
-      <p class="muted">先选定上面一条方向，再出稿。按这份活的格式出，不按身份。短视频、小红书、公众号都挂在这里。</p>
+      <p class="muted">先选定上面一条方向，再出稿。按这份活的格式出，不按身份。短视频、小红书、公众号、直播场次都挂在这里。直播场次走场次方法：循环、原话、不编稀缺。</p>
       <div class="tabs" id="fmtTabs">
         ${FORMATS.map(([id, name]) => `<button type="button" class="${format === id ? "on" : ""}" data-fmt="${id}">${name}</button>`).join("")}
       </div>
@@ -733,7 +810,7 @@ async function renderReview() {
   const k = (state.tasks || []).filter((t) => t.stage === "judge" || t.stage === "need_evidence").length;
   main.innerHTML = `
     <p class="kicker">月度复盘</p>
-    <h1 class="mast" style="font-size:28px">全组这个月钉了什么</h1>
+    <h1 class="mast" style="font-size:28px">你这个月钉了什么</h1>
     ${
       n
         ? `<div class="must">
@@ -753,13 +830,14 @@ async function renderSettings() {
   main.innerHTML = `
     <p class="kicker">设置</p>
     <h1 class="mast" style="font-size:28px">可选备注，不是进门问卷</h1>
+    <p class="sub">登录邮箱 ${esc(currentUser?.email || "")} · 只看见你自己的活</p>
     <form class="engine" id="setForm">
       <section class="block">
         <h2>这次可能用得上的背景</h2>
         <p class="muted" style="margin-bottom:12px">不填也能开工。这不是账号档案，不管你有几个号。判断默认只看这一份活。</p>
         <div class="field"><label for="company">公司 / 组名（可选）</label><input id="company" value="${esc(s.companyName || "")}" /></div>
         <div class="field"><label for="who">我的名字（钉子会记上，可选）</label><input id="who" value="${esc(s.operatorName || "")}" placeholder="例如 小周" /></div>
-        <div class="field"><label for="niche">这一次相关的行业或主题（可选）</label><input id="niche" value="${esc(s.niche || "")}" placeholder="不锁行业。有就写，没有就空着" /></div>
+        <div class="field"><label for="niche">你认的领域，最多 1 到 3 个（可选）</label><input id="niche" value="${esc(s.niche || "")}" placeholder="例如 地产, 品牌。逗号分开。不填也能开工，填了选题池往这边偏" /></div>
         <div class="field"><label for="persona">这一次怎么说话（可选）</label><input id="persona" value="${esc(s.persona || "")}" placeholder="不是人设档案，只是这次的语气" /></div>
         <div class="field"><label for="audience">这一次拍给谁（可选）</label><input id="audience" value="${esc(s.audience || "")}" placeholder="谁会看" /></div>
         <div class="field">
@@ -776,7 +854,12 @@ async function renderSettings() {
         <h2>大模型</h2>
         <p class="muted" style="margin-bottom:12px">选题、如何拍、如何走这里。默认 Agnes。Key 只存在本机，不要发到对话框。</p>
         <div class="field"><label for="llmBase">Base URL</label><input id="llmBase" value="${esc(s.llmBaseUrl || "https://apihub.agnes-ai.com/v1")}" /></div>
-        <div class="field"><label for="llmKey">API Key</label><input id="llmKey" type="password" value="${esc(s.agnesKey || "")}" autocomplete="off" placeholder="${s.hasAgnesKey ? "已保存，留空不改" : "在这里贴"}" /></div>
+        <div class="field"><label for="llmKey">API Key</label>
+          <div class="pw-wrap">
+            <input id="llmKey" type="password" value="${esc(s.agnesKey || "")}" autocomplete="off" placeholder="${s.hasAgnesKey ? "已保存，留空不改" : "在这里贴"}" />
+            <button class="pw-toggle" type="button" id="llmEye">查看</button>
+          </div>
+        </div>
         <div class="field">
           <label for="llmModel">对话模型</label>
           <div class="field-row">
@@ -796,6 +879,11 @@ async function renderSettings() {
         <div class="field"><label for="f">低粉阈值 · 粉丝低于</label><input id="f" type="number" value="${s.lowFanFollowers}" /></div>
         <div class="field"><label for="l">低粉阈值 · 单篇赞高于</label><input id="l" type="number" value="${s.lowFanLikes}" /></div>
         <button class="btn" type="submit">保存</button>
+      </section>
+      <section class="block">
+        <h2>退出</h2>
+        <p class="muted">退出后，别人用这台电脑也进不了你的工作台。</p>
+        <button class="btn ghost" type="button" id="logoutBtn">退出登录</button>
       </section>
     </form>
   `;
@@ -820,6 +908,12 @@ async function renderSettings() {
   });
   $("#syncModels")?.addEventListener("click", syncModels);
   $("#pingLlm")?.addEventListener("click", pingLlm);
+  bindPasswordEye($("#llmKey"), $("#llmEye"));
+  $("#logoutBtn")?.addEventListener("click", async () => {
+    await api("/api/auth/logout", { method: "POST", body: "{}" });
+    currentUser = null;
+    renderGate();
+  });
 }
 
 const KIND_LABEL = { chat: "对话", image: "图像", video: "视频" };
@@ -955,7 +1049,122 @@ async function renderTheme(id) {
   });
 }
 
+function bindPasswordEye(input, button) {
+  if (!input || !button) return;
+  const sync = () => {
+    const on = input.type === "text";
+    button.textContent = on ? "关闭" : "查看";
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    button.setAttribute("aria-label", on ? "关闭密码显示" : "查看密码");
+  };
+  sync();
+  button.addEventListener("click", () => {
+    input.type = input.type === "password" ? "text" : "password";
+    sync();
+  });
+}
+
+async function loadCaptcha() {
+  const data = await api("/api/auth/captcha");
+  captcha = { id: data.id || "", svg: data.svg || "", startedAt: data.startedAt || Date.now() };
+  const box = $("#captchaBox");
+  if (box) box.innerHTML = captcha.svg || "";
+  const input = $("#captchaAnswer");
+  if (input) input.value = "";
+}
+
+async function renderGate() {
+  document.body.classList.add("gated");
+  const app = document.querySelector(".app");
+  if (app) app.hidden = true;
+  let root = $("#gateRoot");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "gateRoot";
+    document.body.appendChild(root);
+  }
+  const isReg = gateMode === "register";
+  root.innerHTML = `<div class="gate">
+    <form class="gate-card" id="gateForm">
+      <p class="kicker">OSSA</p>
+      <h1>${isReg ? "建一个自己的工作台" : "进来干活"}</h1>
+      <p class="sub">${isReg ? "每人一份活，互相看不见。邮箱只用来登录，不会发信。" : "登录后只看见你自己的选题和活。"}</p>
+      <div class="tabs" style="margin:0 0 16px">
+        <button type="button" class="${isReg ? "" : "on"}" id="toLogin">登录</button>
+        <button type="button" class="${isReg ? "on" : ""}" id="toReg">注册</button>
+      </div>
+      <div class="field"><label for="gateEmail">邮箱</label><input id="gateEmail" type="email" autocomplete="username" required /></div>
+      <div class="field">
+        <label for="gatePassword">密码${isReg ? "（至少 8 位）" : ""}</label>
+        <div class="pw-wrap">
+          <input id="gatePassword" type="password" autocomplete="${isReg ? "new-password" : "current-password"}" required />
+          <button class="pw-toggle" type="button" id="pwEye">查看</button>
+        </div>
+      </div>
+      <div class="honeypot" aria-hidden="true"><input id="gateWebsite" tabindex="-1" autocomplete="off" /></div>
+      <div class="field">
+        <label for="captchaAnswer">验证码</label>
+        <div class="captcha-row">
+          <div id="captchaBox" aria-hidden="true"></div>
+          <input id="captchaAnswer" inputmode="numeric" autocomplete="off" required />
+          <button class="btn ghost" type="button" id="captchaRefresh">换一张</button>
+        </div>
+      </div>
+      <p class="gate-err" id="gateErr"></p>
+      <button class="btn" type="submit">${isReg ? "注册并进入" : "登录"}</button>
+    </form>
+  </div>`;
+  bindPasswordEye($("#gatePassword"), $("#pwEye"));
+  $("#toLogin")?.addEventListener("click", () => {
+    gateMode = "login";
+    renderGate();
+  });
+  $("#toReg")?.addEventListener("click", () => {
+    gateMode = "register";
+    renderGate();
+  });
+  $("#captchaRefresh")?.addEventListener("click", () => loadCaptcha());
+  $("#gateForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = $("#gateErr");
+    err.textContent = "";
+    const payload = {
+      email: $("#gateEmail").value.trim(),
+      password: $("#gatePassword").value,
+      captchaId: captcha.id,
+      captchaAnswer: $("#captchaAnswer").value.trim(),
+      website: $("#gateWebsite").value,
+      startedAt: captcha.startedAt,
+    };
+    const data = await api(isReg ? "/api/auth/register" : "/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (!data.ok) {
+      err.textContent = data.error || "没成功";
+      await loadCaptcha();
+      return;
+    }
+    currentUser = data.user;
+    $("#gateRoot")?.remove();
+    document.body.classList.remove("gated");
+    const shell = document.querySelector(".app");
+    if (shell) shell.hidden = false;
+    render();
+  });
+  await loadCaptcha();
+}
+
 async function render() {
+  if (!currentUser) {
+    const me = await api("/api/auth/me");
+    if (!me.user) return renderGate();
+    currentUser = me.user;
+    document.body.classList.remove("gated");
+    const shell = document.querySelector(".app");
+    if (shell) shell.hidden = false;
+    $("#gateRoot")?.remove();
+  }
   const r = route();
   if (r.view === "engine") return renderEngine();
   if (r.view === "themes" && r.tab) return renderTheme(decodeURIComponent(r.tab));

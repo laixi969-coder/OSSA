@@ -57,6 +57,7 @@ button { cursor: pointer; }
   grid-template-columns: 232px minmax(0, 1fr);
   min-height: 100dvh;
 }
+.app[hidden] { display: none !important; }
 .rail {
   background: var(--rail);
   color: var(--rail-ink);
@@ -335,6 +336,9 @@ button { cursor: pointer; }
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
+.hot-board.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .col {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -583,6 +587,53 @@ button { cursor: pointer; }
   clip: rect(0 0 0 0);
 }
 .sr:focus { position: static; width: auto; height: auto; clip: auto; background: var(--bg); padding: 8px; }
+
+.gate {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+}
+.gate-card {
+  width: min(420px, 100%);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 28px 24px 24px;
+}
+.gate-card h1 { font-family: var(--font-display); font-size: 28px; letter-spacing: -0.03em; margin: 4px 0 8px; }
+.gate-card .sub { color: var(--ink-3); margin-bottom: 18px; }
+.pw-wrap { display: flex; gap: 8px; }
+.pw-wrap input { flex: 1; min-width: 0; }
+.pw-toggle {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: var(--r-sm);
+  padding: 0 12px;
+  min-width: 64px;
+  color: var(--ink-2);
+}
+.captcha-row { display: flex; gap: 8px; align-items: center; }
+.captcha-row svg { border: 1px solid var(--border); border-radius: 10px; background: #f3efe6; }
+.captcha-row input { flex: 1; min-width: 0; }
+.honeypot {
+  position: absolute;
+  left: -9999px;
+  height: 0;
+  overflow: hidden;
+}
+.gate .field { margin-bottom: 12px; }
+.gate .field label { display: block; font-size: 12px; color: var(--ink-3); margin-bottom: 6px; }
+.gate .field input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  min-height: 44px;
+}
+.gate-err { color: var(--down); font-size: 13px; min-height: 1.3em; margin: 4px 0 10px; }
 
 @media (max-width: 980px) {
   .app { grid-template-columns: 1fr; }

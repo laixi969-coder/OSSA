@@ -21,7 +21,9 @@ export type AngleIdea = {
 };
 
 const SKILL_PATH = join(import.meta.dir, "../vendor/hiccai-newsangle/SKILL.md");
+const LIVE_METHOD_PATH = join(import.meta.dir, "live-method.md");
 let skillCache = "";
+let liveMethodCache = "";
 
 export async function loadNewsangleSkill() {
   if (skillCache) return skillCache;
@@ -30,6 +32,15 @@ export async function loadNewsangleSkill() {
   skillCache = (await file.text()).trim();
   if (skillCache.length < 1000) throw new Error("hiccai-newsangle 方法原文不完整");
   return skillCache;
+}
+
+export async function loadLiveMethod() {
+  if (liveMethodCache) return liveMethodCache;
+  const file = Bun.file(LIVE_METHOD_PATH);
+  if (!(await file.exists())) throw new Error("找不到场次方法原文");
+  liveMethodCache = (await file.text()).trim();
+  if (liveMethodCache.length < 800) throw new Error("场次方法原文不完整");
+  return liveMethodCache;
 }
 
 export type NewsScan = {
@@ -111,7 +122,7 @@ export function briefSystem(skill: string) {
 二、hiccai-newsangle 爆点猎手（方法全文，不得省略）
 下面是 https://github.com/laixi969-coder/hiccai-newsangle 的 SKILL.md 原文。你必须遵守其中全部内容：最高原则、模式判断、信息不足时的推进规则、爆点杠杆、视角轮换器、转发语测试、接近性折算、命运发动机（条件启用）及 3.1/3.2/3.3、V.H.S.R. 六步、方向类型、平台与风格路由、标题工程（来源/禁忌/自检）、弱素材三方案、输入类型规则、第10节输出结构、三重质量闸门、flat output 拦截、第13节示例、第14节失败模式、第16节不适用场景。
 内部走完方法再输出 JSON。不要把推理链写进结果。不要把方法缩成几条口诀。
-三个方向必须真的不同：主语、冲突、情绪至少换掉两个变量。配不出转发语的切口作废。标题必须来自反转/时间节点/代价/可拍细节，禁止「关于……的思考」一类摘要题。
+三个方向必须真的不同：主语、冲突、情绪至少换掉两个变量。配不出转发语的切口作废。标题、Hook、shareLine、shot 必须是创作者能直接照搬的句子，禁止「关于……的思考」「可以去做」「适合做xx」一类建议腔。
 可拍闸门：用户主做短视频/小红书/口播时必须给可拍画面；纯判断也可以给，不要空着。
 弱素材按方案 A→B→C 救；接近性折算失败也走弱素材救火，不要只否定。
 三步都救不起来：scan.weak=true，写清 weakNote，topicIdeas 仍须至少 1 条「如果要做，只建议从这里切」。
@@ -192,15 +203,27 @@ topicIdeas 默认 3 条，必须类型不同。素材只适合两类就不要硬
 goldLine 必填一句。`;
 }
 
-export function draftSystem(skill: string) {
+export function draftSystem(skill: string, liveSkill = "") {
+  const liveBlock = liveSkill
+    ? `
+
+三、场次方法（这一稿的格式是直播场次，必须全文遵守，不得缩成口诀）
+下面是 OSSA 从 LiveStream-Agent-Studio 抽出的场次方法原文。认对象、拆场次、编一场、复盘、五环节、默认 6–8 分钟循环、失败模式全部有效。
+没有录屏/逐字稿/分钟表时仍按循环出稿，但数字、稀缺、流量、原话全部标待补证。
+不得编库存、倒计时、销量、疗效、点赞。相关不是因果。引用必须是素材里出现过的连续原话。
+
+方法原文：
+${liveSkill}
+`
+    : "";
   return `你把已采纳的 Newsangle 方向，落成可执行的拍法和稿。
 必须继续遵守 hiccai-newsangle 方法全文，尤其是：平台路由（6.1）、风格路由（6.2）、标题工程（第7节全部）、可拍闸门、失败六条。
 不得另起一个切口。标题、Hook、画面必须承接已选方向的 titles / hooks / shot / shareLine。
-具体、能直接用。禁止「做一个有趣的开头」。禁止摘要题和热血口号空转。
+交给创作者的 shoot.hook、write.opening、write.body、write.titles 必须能直接念或直接贴。禁止「做一个有趣的开头」「可以考虑」「不妨」「第一段讲」「然后讲」「拍摄方案」「内容策略」。write.body 必须是完整口播或完整正文，不是提纲。像方案就作废重写。禁止摘要题和热血口号空转。
 
 方法原文：
 ${skill}
-
+${liveBlock}
 只输出一个 JSON。`;
 }
 
@@ -241,6 +264,6 @@ ${opts.formatHint}
 {
   "format": "${opts.format}",
   "shoot": { "hook": "必须能拍的前3秒或封面/首图", "structure": "", "ending": "", "shots": "承接 shot 和象征细节" },
-  "write": { "titles": ["至少3条，遵守标题工程，承接已有 titles"], "opening": "承接 Hook", "body": "可直接用的口播或正文", "tags": [] }
+  "write": { "titles": ["至少3条，能直接发"], "opening": "能直接念的第一句", "body": "完整可念口播或完整可贴正文，不是提纲", "tags": [] }
 }`;
 }

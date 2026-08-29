@@ -14,6 +14,8 @@
 - 已完成：首屏混灵感 + 一句话开工 + 进行中的活靠前 + 热搜货架默认收起
 - 已完成：选这个 → 一份活（Newsangle 在选定之后；拍写在选定方向之后）
 - 进行中：今日选题池约 10 条（每条推荐理由）+ 种成长期主题（列表，尚未拆树）
+- 已完成：原料货架六格按逛法切（平台热榜 / 案例 / 讨论 / 节点 / 订阅 / 对标），不按选题领域切
+- 已完成：注册/登录隔离（每人一份工作区）+ 验证码 + 密码小眼睛。不做结账
 - 热榜服务：本机 Bun 跑 `vendor/60s`，不用 Docker。不搬 TrendRadar / 不用 newsnow 云端
 
 ## 目录
@@ -26,6 +28,7 @@ OSSA/
 │   ├── server.ts
 │   ├── topic.ts           ← 选题简报 + 拍法/文稿（调 Agnes）
 │   ├── newsangle.ts       ← 加载并执行 hiccai-newsangle 方法原文
+│   ├── live-method.md     ← 场次方法（从 LiveStream-Agent-Studio 抽出，不搬仓）
 │   └── public/            ← index.html / styles.css / app.js
 ├── data/store.json        ← 钉子、选题、源配置（本机，不进密钥仓库）
 └── vendor/
@@ -35,7 +38,7 @@ OSSA/
 
 `vendor/` 只放别人的仓库。要换版本就重新拉，不要在里面做我们自己的功能。
 
-密钥（RedFox Key、Agnes Key）只存在 `data/store.json` 或本机环境变量 `AGNES_API_KEY`，不要写进代码、不要 commit、不要发在聊天里。用户在设置页自己贴。没有密钥时选这个必须说实话，不准编假题。
+密钥（RedFox Key、Agnes Key）只存在各用户的 `data/workspaces/*.json` 或本机环境变量 `AGNES_API_KEY`，不要写进代码、不要 commit、不要发在聊天里。用户在设置页自己贴。没有密钥时选这个必须说实话，不准编假题。登录账号在 `data/accounts.json`（密码哈希），也不进仓库。
 
 大模型在设置页配置：Base URL、API Key、对话模型、同步 `/models`、测连通。默认 Agnes `https://apihub.agnes-ai.com/v1` + `agnes-2.5-flash`。选题只用对话模型；图/视频模型会出现在同步列表里，这一步还不调用。
 
@@ -78,3 +81,8 @@ cd /Users/caiwenbin/OSSA && bun run app/server.ts
 9. 点「换一批」灵感卡必须换；进门不自动拉开热搜货架；首屏灵感不含科技圈和灾难热搜
 10. 热搜优先小红书 / 抖音 / B站，微博等仍可进池但不排第一；货架默认三列主场，可切微博
 11. 搜索引擎和 AI 检索读 /about.html 与 /llms.txt；工作台 `/` 为 noindex。部署时设 `OSSA_PUBLIC_ORIGIN`
+12. 原料货架是六格逛法，不是领域分类。点讨论、节点不报错；订阅能看到非营销 RSS；空状态把人赶到数据引擎贴自己领域的源
+13. 设置里行业最多 1–3 个领域词；有则选题池/案例/订阅往这边偏，没撞词的不删光。不填也能开工。不要加美妆格、职场格
+14. 直播是格式不是频道。出「直播场次」拍写必须加载 app/live-method.md。不把 LiveStream-Agent-Studio 搬进 vendor。
+15. 交给创作者的标题、开头、口播、正文必须能直接照搬。选题池每张是可发标题+可念开头。拍写若是提纲或「可以考虑」，作废重出。不成片文件，但字必须能用。
+16. 未登录打不开工作台数据。注册/登录都要验证码。两人不能看见对方的活。没有结账页。密码框有查看/关闭。

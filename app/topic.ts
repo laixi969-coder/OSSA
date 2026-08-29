@@ -4,6 +4,7 @@ import {
   draftSystem,
   draftUser,
   EMPTY_SCAN,
+  loadLiveMethod,
   loadNewsangleSkill,
   parseIdea,
   parseScan,
@@ -11,7 +12,7 @@ import {
   type NewsScan,
 } from "./newsangle";
 
-export type ContentFormat = "short_video" | "xhs" | "wechat" | "short_drama" | "bilibili" | "ad";
+export type ContentFormat = "short_video" | "xhs" | "wechat" | "short_drama" | "bilibili" | "ad" | "live";
 
 export const FORMAT_LABELS: Record<ContentFormat, string> = {
   short_video: "短视频",
@@ -20,6 +21,7 @@ export const FORMAT_LABELS: Record<ContentFormat, string> = {
   short_drama: "短剧",
   bilibili: "B站中长视频",
   ad: "广告创意",
+  live: "直播场次",
 };
 
 export type Situation = {
@@ -60,13 +62,77 @@ export type TopicBrief = {
 
 const RISK: Record<string, TopicIdea["risk"]> = { 低: "low", 中: "mid", 高: "high", low: "low", mid: "mid", high: "high" };
 
-function extractJson(raw: string): unknown {
-  const fence = raw.match(/```json\s*([\s\S]*?)```/i);
-  const text = fence ? fence[1] : raw;
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("模型没有返回可用的选题结构");
-  return JSON.parse(text.slice(start, end + 1));
+function collectJsonObjects(text: string): string[] {
+  const found: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const start = text.indexOf("{", i);
+    if (start < 0) break;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let closed = false;
+    for (let j = start; j < text.length; j++) {
+      const c = text[j];
+      if (inStr) {
+        if (esc) {
+          esc = false;
+          continue;
+        }
+        if (c === "\\") {
+          esc = true;
+          continue;
+        }
+        if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          found.push(text.slice(start, j + 1));
+          i = j + 1;
+          closed = true;
+          break;
+        }
+      }
+    }
+    if (!closed) break;
+  }
+  return found;
+}
+
+export function extractJson(raw: string): unknown {
+  const fence = raw.match(/```json\s*([\s\S]*?)```/i) || raw.match(/```\s*([\s\S]*?)```/);
+  const text = (fence ? fence[1] : raw)
+    .replace(/^\uFEFF/, "")
+    .replace(/[“”]/g, '"')
+    .replace(/｛/g, "{")
+    .replace(/｝/g, "}")
+    .trim();
+  const objects = collectJsonObjects(text);
+  for (const obj of [...objects].reverse()) {
+    try {
+      return JSON.parse(obj);
+    } catch {
+      try {
+        return JSON.parse(obj.replace(/,\s*([}\]])/g, "$1"));
+      } catch {
+        /* next candidate */
+      }
+    }
+  }
+  throw new Error("模型没有按结构交稿，请再选一次");
+}
+
+export function humanLlmError(err: unknown) {
+  const m = err instanceof Error ? err.message : String(err || "");
+  if (/JSON Parse|Unexpected token|Unrecognized token|not valid JSON/i.test(m)) {
+    return "模型这次没按结构交稿，再点一次「选这个」。";
+  }
+  if (!m.trim()) return "选题生成失败，请再试一次";
+  return m;
 }
 
 export const AGNES_BASE = (process.env.AGNES_BASE_URL || "https://apihub.agnes-ai.com/v1").replace(/\/$/, "");
@@ -215,11 +281,16 @@ async function chat(apiKey: string, model: string, system: string, user: string,
         const parsed = JSON.parse(body) as { error?: { message?: string } };
         detail = parsed.error?.message || detail;
       } catch {
-        /* keep */
+        if (/^[{\[]/.test(body.trim()) === false) detail = "模型接口没有返回结构";
       }
       throw new Error(`模型请求失败：${detail}`);
     }
-    const parsed = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
+    let parsed: { choices?: Array<{ message?: { content?: string } }> };
+    try {
+      parsed = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
+    } catch {
+      throw new Error("模型接口没有返回结构，换一个对话模型或稍后再试");
+    }
     const content = parsed.choices?.[0]?.message?.content || "";
     if (!content.trim()) throw new Error("模型返回空");
     return content;
@@ -252,24 +323,35 @@ export async function generateBrief(opts: {
   const sit = situationBlock(opts.situation);
   const prior = opts.priorTitles.slice(0, 12).map((t) => `• ${t}`).join("\n");
   const skill = await loadNewsangleSkill();
-  const formats = (opts.situation.formats || []).join("、");
-  const raw = await chat(
-    opts.apiKey,
-    opts.model,
-    briefSystem(skill),
-    briefUser({
-      sitText: sit.text,
-      title: opts.signal.title,
-      source: opts.signal.source,
-      summary: opts.signal.summary,
-      url: opts.signal.url,
-      prior,
-      formats,
-    }),
-    90000,
-    opts.base,
-  );
-  const data = extractJson(raw) as Record<string, unknown>;
+  const formatNames = (opts.situation.formats || []).map((f) => FORMAT_LABELS[f] || f);
+  const formats = formatNames.join("、");
+  const liveHint = (opts.situation.formats || []).includes("live")
+    ? "其中含直播场次：方向必须能撑一轮 6–8 分钟循环（场景认同→证据→单一证明→问答→行动→新人重启），不能只是一条短视频钩子。"
+    : "";
+  const user = briefUser({
+    sitText: sit.text,
+    title: opts.signal.title,
+    source: opts.signal.source,
+    summary: opts.signal.summary,
+    url: opts.signal.url,
+    prior,
+    formats: liveHint ? `${formats}。${liveHint}` : formats,
+  });
+  let raw = await chat(opts.apiKey, opts.model, briefSystem(skill), user, 90000, opts.base);
+  let data: Record<string, unknown>;
+  try {
+    data = extractJson(raw) as Record<string, unknown>;
+  } catch {
+    raw = await chat(
+      opts.apiKey,
+      opts.model,
+      briefSystem(skill),
+      `${user}\n\n上次没有输出JSON。只输出一个JSON对象，第一个字符必须是{，不要写「三、」或任何说明。`,
+      90000,
+      opts.base,
+    );
+    data = extractJson(raw) as Record<string, unknown>;
+  }
   const ideasRaw = Array.isArray(data.topicIdeas) ? data.topicIdeas : [];
   const scanRaw = data.scan && typeof data.scan === "object" ? (data.scan as Record<string, unknown>) : {};
   const scan = parseScan({ ...scanRaw, mode: scanRaw.mode || data.mode });
@@ -314,12 +396,14 @@ export async function generateDraft(opts: {
     short_drama: "如何拍=第一集开头冲突和结尾悬念。如何写=剧情大纲+人物记忆点。",
     bilibili: "如何拍=开头15-30秒的信息承诺、中段知识爆点。如何写=标题+分段口播大纲。",
     ad: "如何拍=可执行的概念画面。如何写=不像广告的脚本初稿。",
+    live: "必须遵守场次方法全文。如何拍=6–8分钟一轮：场景认同→证据→单一证明→问答→行动→新人重启；标第N对象；库存口令不超过45秒。如何写=完整一轮口播+合规/待补证。没有逐字稿或分钟表时，数字、稀缺、流量全部标待补证，并列出要贴的证据。不得编库存、倒计时、疗效、成交。",
   };
   const skill = await loadNewsangleSkill();
+  const liveSkill = opts.format === "live" ? await loadLiveMethod() : "";
   const raw = await chat(
     opts.apiKey,
     opts.model,
-    draftSystem(skill),
+    draftSystem(skill, liveSkill),
     draftUser({
       sitText: sit.text,
       signalTitle: opts.signal.title,
@@ -332,24 +416,73 @@ export async function generateDraft(opts: {
     90000,
     opts.base,
   );
-  const data = extractJson(raw) as Record<string, unknown>;
-  const shoot = (data.shoot || {}) as Record<string, unknown>;
-  const write = (data.write || {}) as Record<string, unknown>;
-  const titles = Array.isArray(write.titles) ? write.titles.map((x) => String(x)).filter(Boolean) : [];
-  const tags = Array.isArray(write.tags) ? write.tags.map((x) => String(x)).filter(Boolean) : [];
-  return {
-    format: opts.format,
-    shoot: {
-      hook: String(shoot.hook || "").trim(),
-      structure: String(shoot.structure || "").trim(),
-      ending: String(shoot.ending || "").trim(),
-      shots: String(shoot.shots || "").trim(),
-    },
-    write: {
-      titles: titles.slice(0, 6),
-      opening: String(write.opening || "").trim(),
-      body: String(write.body || "").trim(),
-      tags: tags.slice(0, 12),
-    },
+  const parsePack = (rawText: string): DraftPack => {
+    const data = extractJson(rawText) as Record<string, unknown>;
+    const shoot = (data.shoot || {}) as Record<string, unknown>;
+    const write = (data.write || {}) as Record<string, unknown>;
+    const titles = Array.isArray(write.titles) ? write.titles.map((x) => String(x)).filter(Boolean) : [];
+    const tags = Array.isArray(write.tags) ? write.tags.map((x) => String(x)).filter(Boolean) : [];
+    return {
+      format: opts.format,
+      shoot: {
+        hook: String(shoot.hook || "").trim(),
+        structure: String(shoot.structure || "").trim(),
+        ending: String(shoot.ending || "").trim(),
+        shots: String(shoot.shots || "").trim(),
+      },
+      write: {
+        titles: titles.slice(0, 6),
+        opening: String(write.opening || "").trim(),
+        body: String(write.body || "").trim(),
+        tags: tags.slice(0, 12),
+      },
+    };
   };
+  const tooSoft = (pack: DraftPack) => {
+    const blob = [pack.shoot.hook, pack.write.opening, pack.write.body, ...(pack.write.titles || [])].join("\n");
+    if (/可以考虑|不妨试试|建议你|建议做|第一段讲|第二段讲|然后讲|接下来讲|做一个有趣|关于.{0,16}的(思考|分享|盘点)|拍摄方案|内容策略|你可以去/.test(blob)) {
+      return true;
+    }
+    return pack.write.body.replace(/\s/g, "").length < 80;
+  };
+  const draftPrompt = draftUser({
+    sitText: sit.text,
+    signalTitle: opts.signal.title,
+    source: opts.signal.source,
+    idea: opts.idea,
+    format: opts.format,
+    formatHint: formatHint[opts.format],
+    formatLabel: label,
+  });
+  let pack: DraftPack;
+  try {
+    pack = parsePack(raw);
+  } catch {
+    const retry = await chat(
+      opts.apiKey,
+      opts.model,
+      draftSystem(skill, liveSkill),
+      `${draftPrompt}\n\n上次没有输出JSON。只输出一个JSON对象，第一个字符必须是{。`,
+      90000,
+      opts.base,
+    );
+    pack = parsePack(retry);
+  }
+  if (tooSoft(pack)) {
+    const retry = await chat(
+      opts.apiKey,
+      opts.model,
+      draftSystem(skill, liveSkill),
+      `${draftPrompt}\n\n上次输出像提纲或建议，作废。必须输出能直接念或直接贴的完整句子和完整稿，不要「第一段讲」「可以考虑」。`,
+      90000,
+      opts.base,
+    );
+    try {
+      const next = parsePack(retry);
+      if (!tooSoft(next) || next.write.body.length > pack.write.body.length) pack = next;
+    } catch {
+      /* keep first pack */
+    }
+  }
+  return pack;
 }

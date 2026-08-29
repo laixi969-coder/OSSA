@@ -1,6 +1,8 @@
 .finesse/
 data/store.json
 data/*.json
+data/workspaces/
+data/accounts.json
 .env
 .env.*
 vendor/60s/node_modules/
