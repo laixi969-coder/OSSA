@@ -41,7 +41,7 @@ function route() {
   const hash = location.hash.replace(/^#/, "") || "/hot";
   const [path, query] = hash.split("?");
   const parts = path.split("/").filter(Boolean);
-  return { view: parts[0] || "hot", tab: parts[1] || "platform", query: new URLSearchParams(query || "") };
+  return { view: parts[0] || "hot", tab: parts[1] || "", query: new URLSearchParams(query || "") };
 }
 
 function setNav(view) {
@@ -78,21 +78,21 @@ async function pinItem(item) {
 }
 
 async function toTopic(item) {
-  if (!item?.title) return toast("这条没有标题，做不成选题");
-  toast("正在做成选题…");
+  if (!item?.title) return toast("这句没有标题，做不成一份活");
+  toast("正在做成一份活…");
   const data = await api("/api/topics", {
     method: "POST",
     body: JSON.stringify({
       title: item.title,
       url: item.url || "",
-      source: item.source || item.kind || "",
-      summary: item.summary || item.line || "",
+      source: item.originLabel || item.source || item.kind || "",
+      summary: item.summary || item.why || item.line || "",
       cover: item.cover || "",
     }),
   });
   if (!data.task?.id) return toast(data.error || "没做成");
   if (data.error) toast(data.error);
-  else toast("选题卡已生成");
+  else toast("这份活已经立了");
   location.hash = `#/tasks/${encodeURIComponent(data.task.id)}`;
 }
 
@@ -112,36 +112,64 @@ function actionsHtml(item) {
   const open = item.url
     ? `<a class="btn ghost" href="${esc(item.url)}" target="_blank" rel="noopener">打开原文</a>`
     : "";
+  const pin = item.url ? `<button class="btn ghost" data-pin>钉借鉴</button>` : "";
   return `<div class="actions">
-    <button class="btn" data-topic>做成选题</button>
+    <button class="btn" data-topic>选这个</button>
+    <button class="btn ghost" data-plant>种成长期主题</button>
     ${open}
-    <button class="btn ghost" data-pin>钉借鉴</button>
+    ${pin}
   </div>`;
 }
 
 function bindCard(el, item) {
   el.querySelector("[data-pin]")?.addEventListener("click", () => pinItem(item));
   el.querySelector("[data-topic]")?.addEventListener("click", () => toTopic(item));
+  el.querySelector("[data-plant]")?.addEventListener("click", () => plantTheme(item));
+}
+
+async function plantTheme(item) {
+  if (!item?.title) return toast("没有标题，种不成主题");
+  const data = await api("/api/themes", {
+    method: "POST",
+    body: JSON.stringify({
+      title: item.title,
+      fromTitle: item.title,
+      fromUrl: item.url || "",
+      origin: item.originLabel || item.origin || item.source || "",
+      summary: item.why || item.summary || "",
+    }),
+  });
+  if (!data.theme?.id) return toast(data.error || "没种上");
+  toast(data.already ? "这棵已经在了，重新激活" : "已种成长期主题，不立刻拍");
 }
 
 async function renderHot(tab) {
   setNav("hot");
-  main.innerHTML = `<p class="kicker">OSSA 内容经营台</p>
-    <h1 class="mast">今天做什么，凭什么做</h1>
-    <p class="sub">给内容组用。先给可做的三条，再给热榜。热闹不等于选题。</p>
-    <div class="hook cold">正在拉今天的数…</div>`;
+  main.innerHTML = `<p class="kicker">OSSA</p>
+    <h1 class="mast">先选项，再拍写</h1>
+    <p class="sub">系统给建议，你来选。选中的才是一份活。</p>
+    <div class="hook cold">正在拉今天的选题池…</div>`;
 
-  const home = await api("/api/home");
+  const batch = Number(sessionStorage.getItem("ossa-batch") || 0);
+  const home = await api(`/api/home?batch=${batch}`);
+  const cards = home.inspirations || home.must || [];
   const pins = (home.pins || [])
     .map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>`)
     .join("");
 
-  const must = (home.must || [])
+  const jobs = (home.jobs || [])
+    .map(
+      (j) =>
+        `<a class="job-chip" href="#/tasks/${encodeURIComponent(j.id)}"><span class="job-chip-title">${esc(j.title)}</span><small>${esc(STAGE_NAME[j.stage] || j.stage)}</small></a>`,
+    )
+    .join("");
+
+  const must = cards
     .map(
       (item) => `<article>
         ${coverHtml(item.cover)}
         <div class="pad">
-        <div class="line">${esc(item.do || item.line || item.source || "")}</div>
+        <div class="line">${esc(item.line || item.originLabel || item.do || "")}</div>
         <h3>${esc(item.title)}</h3>
         <p>${esc(item.why || (item.summary || "").slice(0, 90))}</p>
         ${actionsHtml(item)}
@@ -165,27 +193,48 @@ async function renderHot(tab) {
     .join("");
 
   main.innerHTML = `
-    <p class="kicker">${esc(home.companyName || "内容组")} · OSSA</p>
-    <h1 class="mast">今天做什么，凭什么做</h1>
-    <p class="sub">给企业内容员工用。看见热，做成自己的题，带着拍法和稿去拍。</p>
+    <p class="kicker">${esc(home.companyName || "OSSA")} · 不管账号</p>
+    <h1 class="mast">先选项，再拍写</h1>
+    <p class="sub">约 10 条可选题，每条有理由。选这个才变成活；种成主题不立刻拍。</p>
     <div class="hook ${home.hookReady ? "" : "cold"}">${esc(home.hook || home.coldStart)}</div>
     <div class="meta-row">
       <span>${esc(timeAgo(home.fetchedAt))}</span>
-      <button type="button" id="refresh">刷新</button>
+      <button type="button" id="refresh">换一批</button>
     </div>
+    ${jobs ? `<div class="section-label">进行中的活</div><div class="jobs-rail">${jobs}</div>` : ""}
+    <form class="start" id="startForm">
+      <label class="sr" for="startLine">一句话开工</label>
+      <input id="startLine" name="line" maxlength="120" placeholder="一句话开工，不必从热搜里长出来" autocomplete="off" />
+      <button class="btn" type="submit">开工</button>
+    </form>
+    <div class="section-label">今日选题池${home.themeFilterOn ? " · 已按长期主题筛过热搜" : ""}</div>
     <div class="must">${must || `<div class="empty"><p>${esc(home.coldStart)}</p></div>`}</div>
     ${pins ? `<div class="section-label">最近钉过的借鉴</div><div class="pins">${pins}</div>` : ""}
+    <div class="section-label">原料货架 · 点开再看，热搜不是进门画面</div>
     <div class="tabs">${tabs}</div>
     <div id="pane"></div>
   `;
-  $("#refresh")?.addEventListener("click", () => render());
-  main.querySelectorAll(".must article").forEach((el, i) => bindCard(el, home.must[i]));
-  await renderTab(tab || "platform");
+  $("#refresh")?.addEventListener("click", () => {
+    sessionStorage.setItem("ossa-batch", String(batch + 1));
+    render();
+  });
+  $("#startForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const title = $("#startLine")?.value.trim();
+    if (!title) return toast("先写一句要做什么");
+    toTopic({ title, source: "自己说的", originLabel: "自己说的", summary: "", url: "", cover: "" });
+  });
+  main.querySelectorAll(".must article").forEach((el, i) => bindCard(el, cards[i]));
+  await renderTab(tab);
 }
 
 async function renderTab(tab) {
   const pane = $("#pane");
   if (!pane) return;
+  if (!tab) {
+    pane.innerHTML = `<div class="empty"><h2>原料先收着</h2><p>先在上面选一张，或写一句话开工。热搜、快报、案例点开对应的格再看。</p></div>`;
+    return;
+  }
   if (tab === "platform") return renderPlatform(pane);
   if (tab === "ai") return renderAi(pane);
   if (tab === "marketing") return renderRss(pane);
@@ -217,18 +266,23 @@ async function renderPlatform(pane) {
       box.innerHTML = `<div class="empty" style="margin:12px;max-width:none"><p>${esc(data.error)}</p></div>`;
       return;
     }
-    box.innerHTML = `<ol class="rank">${data.items
+    const items = (data.items || []).slice(0, 6);
+    box.innerHTML = `<ol class="rank">${items
       .map(
         (it, i) => `<li>
           <span class="n num">${it.rank}</span>
           <a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.title)}</a>
           <span class="heat num">${it.heat ? Math.round(it.heat).toLocaleString("zh-CN") : ""}</span>
-          <button type="button" class="btn ghost tiny" data-topic-i="${i}">做成选题</button>
+          <button type="button" class="btn ghost tiny" data-topic-i="${i}">选这个</button>
+          <button type="button" class="btn ghost tiny" data-plant-i="${i}">种成主题</button>
         </li>`,
       )
       .join("")}</ol>`;
     box.querySelectorAll("[data-topic-i]").forEach((btn) => {
-      btn.addEventListener("click", () => toTopic(data.items[Number(btn.dataset.topicI)]));
+      btn.addEventListener("click", () => toTopic(items[Number(btn.dataset.topicI)]));
+    });
+    box.querySelectorAll("[data-plant-i]").forEach((btn) => {
+      btn.addEventListener("click", () => plantTheme(items[Number(btn.dataset.plantI)]));
     });
   }
   $("#left").addEventListener("change", () => fill("#left", "#leftList"));
@@ -290,7 +344,7 @@ async function renderRss(pane) {
     pane.innerHTML = `<div class="empty"><h2>营销情报还没稿</h2><p>${esc(data.error)}</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
     return;
   }
-  pane.innerHTML = `<div class="cards"></div>`;
+  pane.innerHTML = `<p class="muted" style="margin:0 0 12px">只看案例和文章。招聘、跳槽信息不进这一格。</p><div class="cards"></div>`;
   const grid = $(".cards", pane);
   data.items.forEach((item) => {
     const el = document.createElement("article");
@@ -314,7 +368,7 @@ async function renderEngine() {
   main.innerHTML = `
     <p class="kicker">数据引擎</p>
     <h1 class="mast" style="font-size:28px">所有源的开关都在这</h1>
-    <p class="sub">接上了，热点页才有今天的数。测不通就说实话，不要填假榜。</p>
+    <p class="sub">接上了，原料货架才有今天的数。测不通就说实话，不要填假榜。</p>
     <form class="engine" id="engineForm">
       <section class="block">
         <h2>60s 热榜</h2>
@@ -404,7 +458,8 @@ async function renderEngine() {
 
 const FORMATS = [
   ["short_video", "短视频"],
-  ["xhs", "小红书"],
+  ["xhs", "小红书图文"],
+  ["wechat", "公众号"],
   ["short_drama", "短剧"],
   ["bilibili", "B站"],
   ["ad", "广告"],
@@ -504,18 +559,18 @@ async function renderTopic(id) {
   const format = t.format || (s.formats || [])[0] || "short_video";
   const pack = t.drafts?.[format];
   const sitLine = situationFilled(s)
-    ? `${s.niche || ""} · ${s.persona || ""} · ${s.audience || ""}`
-    : "处境还没写。先去设置写清我们是谁，否则这是弱判断。";
+    ? `这次备注：${[s.niche, s.persona, s.audience].filter(Boolean).join(" · ")}`
+    : "没写背景备注。判断只看这份活本身，不是账号档案。";
 
   main.innerHTML = `
-    <p class="kicker"><a href="#/tasks">选题看板</a> · ${esc(STAGE_NAME[t.stage] || t.stage)}</p>
+    <p class="kicker"><a href="#/tasks">进行中的活</a> · ${esc(STAGE_NAME[t.stage] || t.stage)}</p>
     <h1 class="mast" style="font-size:28px">${esc(t.title)}</h1>
     <p class="sub">${esc(t.by || "未署名")} · 来自「${esc(t.signal?.title || t.fromTitle || "")}」</p>
-    <div class="banner ${situationFilled(s) ? "" : "warn"}">${esc(sitLine)}</div>
+    <div class="banner ${situationFilled(s) ? "" : ""}">${esc(sitLine)}</div>
     ${t.error ? `<div class="banner warn">${esc(t.error)}</div>` : ""}
 
     <section class="block">
-      <h2>这条热是什么</h2>
+      <h2>这份活从哪来</h2>
       <p>${esc(t.signal?.title || t.fromTitle || "")}</p>
       <p class="muted">${esc(t.signal?.source || "")} ${t.signal?.summary ? " · " + esc(t.signal.summary) : ""}</p>
       <div class="actions">
@@ -524,9 +579,9 @@ async function renderTopic(id) {
     </section>
 
     <section class="block">
-      <h2>我们拍不拍</h2>
-      <p>${esc(t.followReason || (!t.error && t.noSignalReason) || "看完可拍的题，再决定。")}</p>
-      ${t.noSignal && !t.error ? `<p class="muted">${esc(t.noSignalReason || "这条先别押。")}</p>` : ""}
+      <h2>做不做</h2>
+      <p>${esc(t.followReason || (!t.error && t.noSignalReason) || "看完可切的方向，再决定。")}</p>
+      ${t.noSignal && !t.error ? `<p class="muted">${esc(t.noSignalReason || "这份活先别押。")}</p>` : ""}
       <div class="actions" id="verdict">
         <button class="btn ${t.verdict === "follow" ? "" : "ghost"}" data-v="follow">跟</button>
         <button class="btn ghost" data-v="need_evidence">待补证</button>
@@ -538,18 +593,18 @@ async function renderTopic(id) {
     ${scanHtml(t.scan, t.goldLine)}
 
     <section class="block">
-      <h2>爆款方向</h2>
-      <p class="muted">三个方向必须不同。点选一条，下面是完整切口、标题、Hook 和可拍细节。</p>
+      <h2>可切的方向</h2>
+      <p class="muted">先选一份活，再出方向。三个方向必须不同。点选一条，下面才是切口、标题、Hook 和可拍细节。</p>
       ${
         t.topicIdeas?.length
           ? `<div class="ideas">${t.topicIdeas.map((idea, i) => ideaCard(idea, i, i === (t.selectedIndex ?? 0))).join("")}</div>${ideaDetail(selected)}`
-          : `<p class="muted">没有可拍的题。${t.noSignal ? "证据不够、处境不合，或素材按方法救不起来。" : "生成失败的话，补处境或密钥后再从热点做一次。"}</p>`
+          : `<p class="muted">没有可切的方向。${t.noSignal ? "证据不够，或素材按方法救不起来。" : "生成失败的话，补密钥后再从灵感里选一次。"}</p>`
       }
     </section>
 
     <section class="block">
       <h2>如何拍 / 如何写</h2>
-      <p class="muted">先选定上面一条题，再选出稿。按格式出，挂在这条选题上。</p>
+      <p class="muted">先选定上面一条方向，再出稿。按这份活的格式出，不按身份。短视频、小红书、公众号都挂在这里。</p>
       <div class="tabs" id="fmtTabs">
         ${FORMATS.map(([id, name]) => `<button type="button" class="${format === id ? "on" : ""}" data-fmt="${id}">${name}</button>`).join("")}
       </div>
@@ -605,9 +660,9 @@ async function renderTasks() {
     ["review", "待复盘"],
   ];
   main.innerHTML = `
-    <p class="kicker">任务推进</p>
-    <h1 class="mast" style="font-size:28px">组里的选题</h1>
-    <p class="sub">从热点做成题。卡片上能看出选了哪条切口、有没有拍法和稿。</p>
+    <p class="kicker">进行中的活</p>
+    <h1 class="mast" style="font-size:28px">桌上这些活</h1>
+    <p class="sub">从灵感里选出来的。卡片上能看出切了哪条、有没有拍法和稿。</p>
     <div class="board" id="board"></div>
   `;
   const board = $("#board");
@@ -628,7 +683,7 @@ async function renderTasks() {
               </a>`;
             })
             .join("")
-        : `<p style="color:var(--ink-3);font-size:12px">还没有。从近期热点做成选题。</p>`
+        : `<p style="color:var(--ink-3);font-size:12px">还没有。回今天选一张，或写一句话开工。</p>`
     }`;
     lane.addEventListener("dragover", (e) => e.preventDefault());
     lane.addEventListener("drop", async (e) => {
@@ -660,10 +715,10 @@ async function renderReview() {
       n
         ? `<div class="must">
             <article class="pad-card"><div class="line">钉子</div><h3 class="num">${n}</h3><p>本机记下的借鉴</p></article>
-            <article class="pad-card"><div class="line">选题</div><h3 class="num">${m}</h3><p>已经做成选题的</p></article>
+            <article class="pad-card"><div class="line">活</div><h3 class="num">${m}</h3><p>已经立起来的活</p></article>
             <article class="pad-card"><div class="line">还停在待判断</div><h3 class="num">${k}</h3><p>还没拍板</p></article>
           </div>`
-        : `<div class="empty"><h2>先在近期热点钉 3 条</h2><p>月底这儿才有得看。</p><a class="btn" href="#/hot">去近期热点</a></div>`
+        : `<div class="empty"><h2>先选一份活</h2><p>月底这儿才有得看。</p><a class="btn" href="#/hot">回今天</a></div>`
     }
   `;
 }
@@ -674,22 +729,22 @@ async function renderSettings() {
   const s = state.settings;
   main.innerHTML = `
     <p class="kicker">设置</p>
-    <h1 class="mast" style="font-size:28px">先写清我们是谁</h1>
+    <h1 class="mast" style="font-size:28px">可选备注，不是进门问卷</h1>
     <form class="engine" id="setForm">
       <section class="block">
-        <h2>公司处境</h2>
-        <p class="muted" style="margin-bottom:12px">每家自己填，不限行业。选题、拍法、文稿对着这份处境。不填也能做成选题，只是判断更弱。</p>
-        <div class="field"><label for="company">公司 / 组名</label><input id="company" value="${esc(s.companyName || "")}" /></div>
-        <div class="field"><label for="who">我的名字（钉子会记在组里）</label><input id="who" value="${esc(s.operatorName || "")}" placeholder="例如 小周" /></div>
-        <div class="field"><label for="niche">赛道</label><input id="niche" value="${esc(s.niche || "")}" placeholder="你们做什么就写什么，美妆、教育、B2B、餐饮都行" /></div>
-        <div class="field"><label for="persona">人设</label><input id="persona" value="${esc(s.persona || "")}" placeholder="这个账号怎么说话" /></div>
-        <div class="field"><label for="audience">拍给谁</label><input id="audience" value="${esc(s.audience || "")}" placeholder="谁会看、为谁做内容" /></div>
+        <h2>这次可能用得上的背景</h2>
+        <p class="muted" style="margin-bottom:12px">不填也能开工。这不是账号档案，不管你有几个号。判断默认只看这一份活。</p>
+        <div class="field"><label for="company">公司 / 组名（可选）</label><input id="company" value="${esc(s.companyName || "")}" /></div>
+        <div class="field"><label for="who">我的名字（钉子会记上，可选）</label><input id="who" value="${esc(s.operatorName || "")}" placeholder="例如 小周" /></div>
+        <div class="field"><label for="niche">这一次相关的行业或主题（可选）</label><input id="niche" value="${esc(s.niche || "")}" placeholder="不锁行业。有就写，没有就空着" /></div>
+        <div class="field"><label for="persona">这一次怎么说话（可选）</label><input id="persona" value="${esc(s.persona || "")}" placeholder="不是人设档案，只是这次的语气" /></div>
+        <div class="field"><label for="audience">这一次拍给谁（可选）</label><input id="audience" value="${esc(s.audience || "")}" placeholder="谁会看" /></div>
         <div class="field">
-          <label>主做格式</label>
+          <label>这一次可能用的格式</label>
           <div class="checks" id="fmtChecks">
             ${FORMATS.map(
               ([id, name]) =>
-                `<label class="check"><input type="checkbox" value="${id}" ${(s.formats || ["short_video", "xhs"]).includes(id) ? "checked" : ""}/> ${name}</label>`,
+                `<label class="check"><input type="checkbox" value="${id}" ${(s.formats || ["short_video", "xhs", "wechat"]).includes(id) ? "checked" : ""}/> ${name}</label>`,
             ).join("")}
           </div>
         </div>
@@ -713,7 +768,7 @@ async function renderSettings() {
       </section>
       <section class="block">
         <h2>刷新和阈值</h2>
-        <div class="field"><label for="n">可做条数</label><input id="n" type="number" min="1" max="6" value="${s.mustReadCount}" /></div>
+        <div class="field"><label for="n">选题池条数（8～10）</label><input id="n" type="number" min="8" max="10" value="${s.mustReadCount >= 8 ? s.mustReadCount : 10}" /></div>
         <div class="field"><label for="r">刷新间隔（分钟）</label><input id="r" type="number" min="5" max="180" value="${s.refreshMinutes}" /></div>
         <div class="field"><label for="f">低粉阈值 · 粉丝低于</label><input id="f" type="number" value="${s.lowFanFollowers}" /></div>
         <div class="field"><label for="l">低粉阈值 · 单篇赞高于</label><input id="l" type="number" value="${s.lowFanLikes}" /></div>
@@ -730,7 +785,7 @@ async function renderSettings() {
       niche: $("#niche").value.trim(),
       persona: $("#persona").value.trim(),
       audience: $("#audience").value.trim(),
-      formats: formats.length ? formats : ["short_video", "xhs"],
+      formats: formats.length ? formats : ["short_video", "xhs", "wechat"],
       mustReadCount: Number($("#n").value),
       refreshMinutes: Number($("#r").value),
       lowFanFollowers: Number($("#f").value),
@@ -807,14 +862,86 @@ async function pingLlm() {
   toast(r.hint || (r.ok ? "通了" : "不通"));
 }
 
+async function renderThemes() {
+  setNav("themes");
+  const state = await api("/api/state");
+  const themes = state.themes || [];
+  main.innerHTML = `
+    <p class="kicker">长期主题</p>
+    <h1 class="mast" style="font-size:28px">种下的题，下次还长</h1>
+    <p class="sub">这不是账号。高价值的话题种在这儿。拆成子主题是下一步；现在可以从一棵树上开工。</p>
+    <form class="start" id="plantForm">
+      <label class="sr" for="plantLine">种一个主题</label>
+      <input id="plantLine" maxlength="80" placeholder="一句话种一个主题，比如：德芙联名翻车怎么讲" autocomplete="off" />
+      <button class="btn" type="submit">种下</button>
+    </form>
+    ${
+      themes.length
+        ? `<div class="cards">${themes
+            .map(
+              (t) => `<a class="card" href="#/themes/${encodeURIComponent(t.id)}">
+                <div class="body">
+                  <div class="src">${esc(t.status === "paused" ? "已停用" : "在长")} · ${esc(t.origin || "")}</div>
+                  <h3>${esc(t.title)}</h3>
+                  <p>${esc(t.summary || t.fromTitle || "")}</p>
+                </div>
+              </a>`,
+            )
+            .join("")}</div>`
+        : `<div class="empty"><h2>还没有长期主题</h2><p>从今天的选题池点「种成长期主题」，或在上面写一句。没种的时候，选题池不过滤。</p><a class="btn" href="#/hot">回今天</a></div>`
+    }
+  `;
+  $("#plantForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = $("#plantLine")?.value.trim();
+    if (!title) return toast("先写一句要种什么");
+    await plantTheme({ title, origin: "自己说的", summary: "" });
+    renderThemes();
+  });
+}
+
+async function renderTheme(id) {
+  setNav("themes");
+  const state = await api("/api/state");
+  const t = (state.themes || []).find((x) => x.id === id);
+  if (!t) {
+    main.innerHTML = `<div class="empty"><h2>找不到这棵主题</h2><a class="btn" href="#/themes">回长期主题</a></div>`;
+    return;
+  }
+  main.innerHTML = `
+    <p class="kicker"><a href="#/themes">长期主题</a> · ${esc(t.status === "paused" ? "已停用" : "在长")}</p>
+    <h1 class="mast" style="font-size:28px">${esc(t.title)}</h1>
+    <p class="sub">${esc(t.by || "未署名")} · 种于 ${(t.plantedAt || "").slice(0, 10)} · 来自「${esc(t.fromTitle || t.title)}」</p>
+    <div class="banner">拆成 10 个子主题、20 个角度是下一步。现在可以从这开工，变成一份活。</div>
+    ${t.summary ? `<section class="block"><h2>种下时的理由</h2><p>${esc(t.summary)}</p></section>` : ""}
+    <div class="actions">
+      <button class="btn" id="fromTheme">从这开工</button>
+      ${t.fromUrl ? `<a class="btn ghost" href="${esc(t.fromUrl)}" target="_blank" rel="noopener">打开原文</a>` : ""}
+      <button class="btn ghost" id="pauseTheme">${t.status === "paused" ? "重新激活" : "先停用"}</button>
+    </div>
+  `;
+  $("#fromTheme")?.addEventListener("click", () =>
+    toTopic({ title: t.title, url: t.fromUrl || "", source: "长期主题", summary: t.summary || "", cover: "" }),
+  );
+  $("#pauseTheme")?.addEventListener("click", async () => {
+    await api("/api/themes", {
+      method: "POST",
+      body: JSON.stringify({ id: t.id, status: t.status === "paused" ? "active" : "paused" }),
+    });
+    renderTheme(id);
+  });
+}
+
 async function render() {
   const r = route();
   if (r.view === "engine") return renderEngine();
+  if (r.view === "themes" && r.tab) return renderTheme(decodeURIComponent(r.tab));
+  if (r.view === "themes") return renderThemes();
   if (r.view === "tasks" && r.tab && r.tab !== "platform") return renderTopic(decodeURIComponent(r.tab));
   if (r.view === "tasks") return renderTasks();
   if (r.view === "review") return renderReview();
   if (r.view === "settings") return renderSettings();
-  return renderHot(r.tab === "hot" ? "platform" : r.tab);
+  return renderHot(r.tab);
 }
 
 window.addEventListener("hashchange", render);

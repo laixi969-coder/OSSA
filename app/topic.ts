@@ -11,11 +11,12 @@ import {
   type NewsScan,
 } from "./newsangle";
 
-export type ContentFormat = "short_video" | "xhs" | "short_drama" | "bilibili" | "ad";
+export type ContentFormat = "short_video" | "xhs" | "wechat" | "short_drama" | "bilibili" | "ad";
 
 export const FORMAT_LABELS: Record<ContentFormat, string> = {
   short_video: "短视频",
   xhs: "小红书图文",
+  wechat: "公众号文字",
   short_drama: "短剧",
   bilibili: "B站中长视频",
   ad: "广告创意",
@@ -235,8 +236,8 @@ function situationBlock(s: Situation) {
   return {
     filled,
     text: filled
-      ? `赛道：${s.niche || "未写"}\n人设：${s.persona || "未写"}\n受众：${s.audience || "未写"}\n主做格式：${(s.formats || []).map((f) => FORMAT_LABELS[f] || f).join("、") || "短视频、小红书"}`
-      : "这家还没写处境。不要假设任何行业。只根据这条热本身说话，对不上就交白卷，不要编成适合所有人的题。",
+      ? `可选背景（不是账号档案）：\n行业/主题：${s.niche || "未写"}\n这一次怎么说话：${s.persona || "未写"}\n拍给谁：${s.audience || "未写"}\n这一次用什么格式：${(s.formats || []).map((f) => FORMAT_LABELS[f] || f).join("、") || "短视频、小红书、公众号"}`
+      : "这次没写背景备注。不要假设任何行业或账号。只根据这份活本身说话，对不上就交白卷，不要编成适合所有人的题。",
   };
 }
 
@@ -281,11 +282,11 @@ export async function generateBrief(opts: {
     ? data.evidenceLimitations.map((x) => String(x))
     : [];
   if (!limitations.some((x) => /一次|采样|趋势/.test(x))) {
-    limitations.unshift("这是这一条热点，不是连续数据，不能据此说它正在上升或已经退潮。");
+    limitations.unshift("这是这一份素材，不是连续数据，不能据此说它正在上升或已经退潮。");
   }
   return {
     noSignal,
-    noSignalReason: String(data.noSignalReason || (noSignal ? "这条热和我们的处境对不上，先别拍。" : "")),
+    noSignalReason: String(data.noSignalReason || (noSignal ? "这份活现在不适合硬做，先别拍。" : "")),
     followReason: String(data.followReason || "").trim(),
     verdictHint,
     topicIdeas,
@@ -309,6 +310,7 @@ export async function generateDraft(opts: {
   const formatHint: Record<ContentFormat, string> = {
     short_video: "如何拍=前3秒可念台词或画面、中段分点带大概秒数、结尾行动引导、2-4个画面。如何写=5个备选标题+完整口播。视频/口播必须过可拍闸门。",
     xhs: "如何拍=封面打法、图序建议。如何写=3个封面标题、3个首句、完整正文、8-12个话题标签（大词/垂类分开写在 tags 里）。小红书必须落到「和我有什么关系」。",
+    wechat: "如何拍=封面题和配图位置（这篇可以以文字为主）。如何写=3个标题、开头钩子、完整分段正文，可直接贴进公众号。不要写成短视频口播。",
     short_drama: "如何拍=第一集开头冲突和结尾悬念。如何写=剧情大纲+人物记忆点。",
     bilibili: "如何拍=开头15-30秒的信息承诺、中段知识爆点。如何写=标题+分段口播大纲。",
     ad: "如何拍=可执行的概念画面。如何写=不像广告的脚本初稿。",

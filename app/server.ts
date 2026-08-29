@@ -80,7 +80,18 @@ type Task = {
   scan: NewsScan;
   goldLine: string;
 };
-type Store = { settings: Settings; pins: Pin[]; tasks: Task[] };
+type Theme = {
+  id: string;
+  title: string;
+  fromTitle: string;
+  fromUrl: string;
+  origin: string;
+  summary: string;
+  status: "active" | "paused";
+  plantedAt: string;
+  by: string;
+};
+type Store = { settings: Settings; pins: Pin[]; tasks: Task[]; themes: Theme[] };
 
 const DEFAULT_FEEDS: RssFeed[] = [
   { id: "digitaling", name: "数英", url: "https://www.digitaling.com/rss", enabled: true, group: "marketing" },
@@ -163,7 +174,7 @@ function situationOf(settings: Settings): Situation {
     niche: settings.niche || "",
     persona: settings.persona || "",
     audience: settings.audience || "",
-    formats: formats.length ? formats : ["short_video", "xhs"],
+    formats: formats.length ? formats : ["short_video", "xhs", "wechat"],
   };
 }
 
@@ -194,9 +205,10 @@ async function readStore(): Promise<Store> {
   store.settings.persona = store.settings.persona || "";
   store.settings.audience = store.settings.audience || "";
   store.settings.formats =
-    store.settings.formats?.length ? store.settings.formats : ["short_video", "xhs"];
+    store.settings.formats?.length ? store.settings.formats : ["short_video", "xhs", "wechat"];
   store.settings.rssFeeds = store.settings.rssFeeds || [];
   store.tasks = (store.tasks || []).map(migrateTask);
+  store.themes = store.themes || [];
   for (const feed of DEFAULT_FEEDS) {
     if (!store.settings.rssFeeds.some((f) => f.url === feed.url || f.id === feed.id)) {
       store.settings.rssFeeds.push(feed);
@@ -220,14 +232,52 @@ function json(data: unknown, status = 200) {
 function decodeXml(s: string) {
   return s
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = Number(n);
+      try {
+        return code ? String.fromCodePoint(code) : _;
+      } catch {
+        return _;
+      }
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => {
+      try {
+        return String.fromCodePoint(parseInt(n, 16));
+      } catch {
+        return _;
+      }
+    })
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
     .replace(/&nbsp;/g, " ")
     .replace(/&#160;/g, " ")
     .trim();
+}
+
+function cleanRssTitle(title: string) {
+  return title.replace(/^(文章频道|项目频道|招聘频道)\s*[-—–]\s*/, "").trim();
+}
+
+function isJobListing(item: { title?: string; url?: string }) {
+  const title = item.title || "";
+  const url = item.url || "";
+  if (/digitaling\.com\/jobs\b/i.test(url)) return true;
+  if (/\/jobs\/\d+/i.test(url)) return true;
+  if (/(^|\s)招聘频道\s*[-—–]/.test(title)) return true;
+  if (/(诚聘|急聘|招聘启事|投递简历)/.test(title)) return true;
+  return false;
+}
+
+function isPromoJunk(item: { title?: string; url?: string }) {
+  const title = item.title || "";
+  const url = item.url || "";
+  if (/sfsdata\.com\/commarts\/subscribe/i.test(url)) return true;
+  if (/last call|professional discount|subscribe now/i.test(title)) return true;
+  return false;
 }
 
 function tag(block: string, name: string) {
@@ -251,7 +301,7 @@ function rssCover(chunk: string, desc: string) {
 
 function parseRss(xml: string, sourceName: string) {
   const chunks = xml.split(/<item[\s>]/i).slice(1);
-  return chunks.slice(0, 24).map((chunk, i) => {
+  return chunks.slice(0, 40).map((chunk, i) => {
     const title = tag(chunk, "title") || "无标题";
     const link = tag(chunk, "link") || tag(chunk, "guid");
     const desc = tag(chunk, "description") || tag(chunk, "content:encoded");
@@ -350,6 +400,8 @@ async function sixty(store: Store, path: string) {
   return fetchJson(`${base}${path}`);
 }
 
+type InspirationOrigin = "hot" | "case" | "news" | "tech" | "evergreen" | "custom";
+
 type SignalItem = {
   id: string;
   rank: number;
@@ -363,6 +415,9 @@ type SignalItem = {
   kind?: string;
   why?: string;
   do?: string;
+  origin?: InspirationOrigin;
+  originLabel?: string;
+  matchedTheme?: string;
 };
 
 function whyDo(kind: string) {
@@ -380,8 +435,145 @@ function whyDo(kind: string) {
     tech: { why: "科技媒体在报，适合做跟进解读", do: "跟进解读" },
     github: { why: "开源圈今天涨得快，适合点评或试用", do: "评测" },
     product: { why: "新品上架，适合做首发体验", do: "评测" },
+    evergreen: { why: "不靠热搜也能开工，靠你看见了什么、被问了什么", do: "常青" },
   };
-  return map[kind] || { why: "值得看一眼，再决定做不做", do: "先钉" };
+  return map[kind] || { why: "值得看一眼，再决定做不做", do: "先看" };
+}
+
+const ORIGIN_LABEL: Record<InspirationOrigin, string> = {
+  hot: "热搜",
+  case: "案例",
+  news: "快报",
+  tech: "科技",
+  evergreen: "常青",
+  custom: "自己说的",
+};
+
+const EVERGREEN: Array<{ title: string; summary: string; do: string; why: string }> = [
+  { title: "把今天亲眼看到的一件事讲清楚", summary: "你在场，别人不在场。不需要热搜来授权。", do: "现场", why: "没流量也能做，靠你看见了什么" },
+  { title: "回答那个被问了十遍的问题", summary: "私信、评论、当面反复出现的，就是常青题。", do: "答疑", why: "搜索和提问比热搜更稳" },
+  { title: "把一次做砸的事写成对照", summary: "失败比成功好拍，因为代价是具体的。", do: "复盘", why: "对照比口号有画面" },
+  { title: "把一个默认说法反过来讲", summary: "行业里人人都这么说的那句，往往经不起追问。", do: "反常识", why: "反转本身就是切口" },
+  { title: "拆一条别人刚做成的案例，只拆方法不跟热度", summary: "学结构，不学热搜。", do: "拆方法", why: "方法可迁移，热度不可复制" },
+  { title: "做一次前后对比实验，把过程公开", summary: "同一件事，改一个变量，拍下结果。", do: "实验", why: "过程比结论更可跟" },
+  { title: "把一个专业动作拆成外行人能跟的步骤", summary: "你会的那一步，别人卡在门口。", do: "教程", why: "步骤本身就是内容" },
+  { title: "把一句客户原话扩成一篇或一条", summary: "原话比你编的人设更真。", do: "原话", why: "证据在对方嘴里" },
+  { title: "写给三年前的自己：当时最容易走错的那一步", summary: "一封信，一个坑，一个补救。", do: "书信", why: "时间差就是戏剧" },
+  { title: "同一件事，短视频、小红书、公众号三种写法", summary: "不是三个身份，是同一份活的三种格式。", do: "改写", why: "格式跟这份活走，不跟人设走" },
+];
+
+function markOrigin(items: SignalItem[], origin: InspirationOrigin): SignalItem[] {
+  return items.map((item) => ({ ...item, origin, originLabel: ORIGIN_LABEL[origin] }));
+}
+
+function skipAsHomeHot(title: string) {
+  return /遇难|死亡|地震|泥石流|空难|溃坝|爆炸|伤亡|受灾|救援|灾区|山洪|洪水|杀害|杀人|遇害|身亡|事故|触电|人祸|招聘会/.test(title);
+}
+
+function themeGroups(themes: Theme[]) {
+  return (themes || [])
+    .filter((t) => t.status !== "paused" && t.title)
+    .map((t) => ({
+      title: t.title,
+      needles: [t.title, ...t.title.split(/[\s，。、·/|]+/)].map((s) => s.trim()).filter((s) => s.length >= 2),
+    }));
+}
+
+function matchTheme(text: string, groups: ReturnType<typeof themeGroups>) {
+  if (!groups.length) return "";
+  const hay = text.toLowerCase();
+  for (const g of groups) {
+    if (g.needles.some((n) => hay.includes(n.toLowerCase()))) return g.title;
+  }
+  return "";
+}
+
+function withThemeMatch(items: SignalItem[], groups: ReturnType<typeof themeGroups>) {
+  return items.map((item) => ({
+    ...item,
+    matchedTheme: matchTheme(`${item.title} ${item.summary || ""}`, groups),
+  }));
+}
+
+function oneLiner(item: SignalItem) {
+  const hit = item.matchedTheme ? `和长期主题「${item.matchedTheme}」有关。` : "";
+  if (item.origin === "evergreen" && item.why) return hit + item.why;
+  const sum = (item.summary || "").replace(/\s+/g, " ").trim();
+  if (sum.length >= 8) return (hit + sum).slice(0, 100);
+  if (item.origin === "hot") {
+    const short = (item.title || "").slice(0, 16);
+    return `${hit}热搜在谈「${short}」。热闹不等于选题。`;
+  }
+  if (hit) return hit + "看完再决定做不做。";
+  return item.why || "还没有长期主题，这条先按它本身值不值得看。";
+}
+
+function pickEvergreen(n: number, batch = 0): SignalItem[] {
+  const day = Math.floor(Date.now() / 86400000);
+  const start = (day + batch * 2) % EVERGREEN.length;
+  const out: SignalItem[] = [];
+  const used = new Set<string>();
+  for (let i = 0; out.length < n && i < EVERGREEN.length * 2; i++) {
+    const row = EVERGREEN[(start + i) % EVERGREEN.length];
+    if (used.has(row.title)) continue;
+    used.add(row.title);
+    out.push(
+      stamp("evergreen", {
+        id: `ever:${row.title}`,
+        rank: 0,
+        title: row.title,
+        url: "",
+        summary: row.summary,
+        cover: "",
+        heat: 0,
+        source: "常青",
+        publishedAt: "",
+        why: row.why,
+        do: row.do,
+      }),
+    );
+  }
+  return markOrigin(out, "evergreen").map((item) => {
+    const row = EVERGREEN.find((x) => x.title === item.title);
+    return row ? { ...item, why: row.why, do: row.do } : item;
+  });
+}
+
+function mixInspirations(
+  pools: Array<{ origin: InspirationOrigin; items: SignalItem[]; cap: number }>,
+  want: number,
+  batch = 0,
+): SignalItem[] {
+  const used = new Set<string>();
+  const out: SignalItem[] = [];
+  const keyOf = (title: string) => title.replace(/\s+/g, "").slice(0, 22);
+  const take = (item: SignalItem | undefined, origin: InspirationOrigin) => {
+    if (!item?.title || out.length >= want) return;
+    const key = keyOf(item.title);
+    if (used.has(key)) return;
+    used.add(key);
+    out.push({
+      ...item,
+      origin,
+      originLabel: ORIGIN_LABEL[origin],
+      why: oneLiner({ ...item, origin }),
+    });
+  };
+  pickEvergreen(3, batch).forEach((item) => take(item, "evergreen"));
+  let round = 0;
+  while (out.length < want && round < 8) {
+    for (const pool of pools) {
+      const taken = out.filter((x) => x.origin === pool.origin).length;
+      if (taken >= pool.cap) continue;
+      take(pool.items[round + batch], pool.origin);
+      if (out.length >= want) break;
+    }
+    round++;
+  }
+  if (out.length < Math.min(5, want)) {
+    pickEvergreen(7, batch + 1).forEach((item) => take(item, "evergreen"));
+  }
+  return out.slice(0, want);
 }
 
 function stamp(kind: string, item: SignalItem): SignalItem {
@@ -525,11 +717,24 @@ async function rssItems(store: Store, group?: string) {
       return { feed: feed.name, items: parseRss(r.body, feed.name) };
     }),
   );
-  const items = settled.flatMap((s) =>
-    s.items.map((it) => stamp(group === "open" ? "product" : group === "tech" ? "tech" : "marketing", it as SignalItem)),
-  );
+  const kind = group === "open" ? "product" : group === "tech" ? "tech" : "marketing";
+  let items = settled.flatMap((s) => s.items.map((it) => stamp(kind, it as SignalItem)));
+  items = items.filter((it) => !isJobListing(it));
+  if (group === "marketing") {
+    items = items
+      .filter((it) => !isPromoJunk(it))
+      .map((it) => ({ ...it, title: cleanRssTitle(it.title) }))
+      .sort((a, b) => Number(/\/projects\//i.test(b.url)) - Number(/\/projects\//i.test(a.url)));
+  }
   if (!items.length) {
-    return { ok: false, error: "RSS 源还在，只是今天还没拉到稿。去数据引擎测一下连通。", items: [] };
+    return {
+      ok: false,
+      error:
+        group === "marketing"
+          ? "今天的营销源里没有可看的案例或文章。招聘信息不会放进来。"
+          : "RSS 源还在，只是今天还没拉到稿。去数据引擎测一下连通。",
+      items: [],
+    };
   }
   return { ok: true, error: "", items };
 }
@@ -568,6 +773,7 @@ Bun.serve({
           hasRedfoxKey: Boolean(store.settings.redfoxKey),
           pins: store.pins,
           tasks: store.tasks,
+          themes: store.themes,
         });
       }
 
@@ -591,7 +797,7 @@ Bun.serve({
         }
         next.xaiKey = "";
         if (body.formats) {
-          next.formats = body.formats.length ? body.formats : ["short_video", "xhs"];
+          next.formats = body.formats.length ? body.formats : ["short_video", "xhs", "wechat"];
         }
         next.llmBaseUrl = (body.llmBaseUrl || store.settings.llmBaseUrl || AGNES_BASE).replace(/\/$/, "");
         next.llmModel = body.llmModel || store.settings.llmModel || AGNES_CHAT_MODEL;
@@ -720,11 +926,11 @@ Bun.serve({
 
       if (path === "/api/home") {
         const store = await readStore();
-        const [weiboRaw, aihot, rss, techRaw] = await Promise.all([
+        const batch = Math.max(0, Number(url.searchParams.get("batch") || 0) || 0);
+        const [weiboRaw, aihot, rss] = await Promise.all([
           sixty(store, "/v2/weibo"),
           aihotItems(),
           rssItems(store, "marketing"),
-          sixty(store, "/v2/it-news"),
         ]);
         let weibo = { ok: false, error: "", items: [] as SignalItem[] };
         if (weiboRaw.ok) {
@@ -736,45 +942,106 @@ Bun.serve({
         } else {
           weibo = { ok: false, error: "本机 60s 还没开，默认地址 http://127.0.0.1:4399", items: [] };
         }
-        let tech = { ok: false, items: [] as SignalItem[] };
-        if (techRaw.ok) {
-          try {
-            tech = mapHot("it-news", JSON.parse(techRaw.body));
-          } catch {
-            tech = { ok: false, items: [] };
-          }
+        const wantRaw = Number(store.settings.mustReadCount || 10);
+        const want = wantRaw >= 8 && wantRaw <= 10 ? wantRaw : 10;
+        const groups = themeGroups(store.themes || []);
+        let hotPool = weibo.items.filter((it) => !skipAsHomeHot(it.title));
+        if (groups.length) {
+          hotPool = hotPool.filter((it) => matchTheme(`${it.title} ${it.summary || ""}`, groups));
         }
+        const cases = withThemeMatch(markOrigin(rss.items, "case"), groups).sort(
+          (a, b) => Number(Boolean(b.matchedTheme)) - Number(Boolean(a.matchedTheme)),
+        );
+        const news = withThemeMatch(markOrigin(aihot.items, "news"), groups);
+        const hots = withThemeMatch(markOrigin(hotPool, "hot"), groups);
+        const inspirations = mixInspirations(
+          [
+            { origin: "case", items: cases, cap: 4 },
+            { origin: "news", items: news, cap: 2 },
+            { origin: "hot", items: hots, cap: 2 },
+          ],
+          want,
+          batch,
+        ).map((item) => ({
+          ...item,
+          line: `${item.originLabel || ORIGIN_LABEL[item.origin || "evergreen"]} · ${item.do || ""}`,
+        }));
 
-        const topWeibo = weibo.items[0];
-        const topAi = aihot.items[0];
-        const topRss = rss.items[0];
-        const stuck = store.tasks.filter((t) => t.stage === "judge" || t.stage === "need_evidence").length;
-        const firstDo = topRss || topWeibo || topAi;
+        const OPEN = new Set(["judge", "need_evidence", "adopted", "making"]);
+        const openJobs = store.tasks
+          .filter((t) => OPEN.has(t.stage))
+          .sort((a, b) => (a.lastMovedAt < b.lastMovedAt ? 1 : -1))
+          .slice(0, 5)
+          .map((t) => ({
+            id: t.id,
+            title: t.title,
+            stage: t.stage,
+            origin: t.signal?.source || t.fromTitle || "",
+          }));
 
         const hookParts: string[] = [];
-        hookParts.push("今日可做 3 条");
-        hookParts.push(stuck ? `组里 ${stuck} 个选题待判断` : "组里还没有待判断的选题");
-        if (firstDo?.title) hookParts.push(`先做：${firstDo.title.slice(0, 18)}${firstDo.title.length > 18 ? "…" : ""}`);
-
-        const must = [];
-        if (topWeibo) must.push({ ...topWeibo, line: `${topWeibo.do} · ${topWeibo.why}` });
-        if (topRss) must.push({ ...topRss, line: `${topRss.do} · ${topRss.why}` });
-        if (topAi) must.push({ ...topAi, line: `${topAi.do} · ${topAi.why}` });
-        else if (tech.items[0]) must.push({ ...tech.items[0], line: `${tech.items[0].do} · ${tech.items[0].why}` });
+        if (openJobs.length) {
+          hookParts.push(`桌上还有 ${openJobs.length} 份活没收`);
+          hookParts.push(`先把「${openJobs[0].title.slice(0, 18)}${openJobs[0].title.length > 18 ? "…" : ""}」收完`);
+        } else if (inspirations.length) {
+          hookParts.push(`今天选题池 ${inspirations.length} 条`);
+          hookParts.push(`先看「${inspirations[0].title.slice(0, 18)}${inspirations[0].title.length > 18 ? "…" : ""}」`);
+        }
+        const planted = (store.themes || []).filter((t) => t.status !== "paused").length;
+        if (planted) hookParts.push(`已种 ${planted} 个长期主题`);
+        const coldStart = "热榜没起来也没关系。先写一句话开工，或从常青题里挑一张。";
 
         return json({
           fetchedAt: new Date().toISOString(),
-          hook: hookParts.filter(Boolean).join(" · "),
-          hookReady: Boolean(topWeibo || aihot.ok || rss.ok),
-          coldStart: "热榜、案例、科技源现在都能看。员工在设置里写上自己的名字，钉子会记在组里。",
-          must: must.slice(0, store.settings.mustReadCount || 3),
+          hook: hookParts.join(" · ") || coldStart,
+          hookReady: inspirations.length > 0,
+          coldStart,
+          inspirations,
+          must: inspirations,
+          jobs: openJobs,
           pins: store.pins.slice(0, 5),
+          themes: (store.themes || []).filter((t) => t.status !== "paused").slice(0, 8),
+          themeFilterOn: groups.length > 0,
           weiboOk: weibo.ok,
           aihotOk: aihot.ok,
           rssOk: rss.ok,
           operatorName: store.settings.operatorName,
           companyName: store.settings.companyName,
         });
+      }
+
+      if (path === "/api/themes" && req.method === "POST") {
+        const store = await readStore();
+        const body = (await req.json()) as Partial<Theme> & { id?: string; status?: Theme["status"] };
+        if (body.id) {
+          store.themes = store.themes.map((t) =>
+            t.id === body.id ? { ...t, status: body.status || t.status, title: body.title || t.title } : t,
+          );
+          await writeStore(store);
+          return json({ ok: true, theme: store.themes.find((t) => t.id === body.id) });
+        }
+        const title = (body.title || "").trim();
+        if (!title) return json({ ok: false, error: "没有标题，种不成主题" }, 400);
+        const existed = store.themes.find((t) => t.title === title);
+        if (existed) {
+          store.themes = store.themes.map((t) => (t.title === title ? { ...t, status: "active" as const } : t));
+          await writeStore(store);
+          return json({ ok: true, theme: store.themes.find((t) => t.title === title), already: true });
+        }
+        const theme: Theme = {
+          id: `theme:${Date.now()}`,
+          title,
+          fromTitle: body.fromTitle || title,
+          fromUrl: body.fromUrl || "",
+          origin: body.origin || "custom",
+          summary: body.summary || "",
+          status: "active",
+          plantedAt: new Date().toISOString(),
+          by: store.settings.operatorName || "未署名",
+        };
+        store.themes = [theme, ...store.themes];
+        await writeStore(store);
+        return json({ ok: true, theme });
       }
 
       if (path === "/api/pins" && req.method === "POST") {
