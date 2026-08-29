@@ -191,7 +191,7 @@ function pinPayload(item) {
 async function pinItem(item) {
   if (!item?.url) return toast("这条没有原文链接，钉不上");
   await api("/api/pins", { method: "POST", body: JSON.stringify(pinPayload(item)) });
-  toast("已钉成借鉴");
+  toast("已钉进借鉴");
   render();
 }
 
@@ -267,14 +267,14 @@ async function plantTheme(item) {
     }),
   });
   if (!data.theme?.id) return toast(data.error || "没种上");
-  toast(data.already ? "这棵已经在了，重新激活" : "已种成长期主题，不立刻拍");
+  toast(data.already ? "这棵已经在了，重新激活" : "已种成长期主题，先放着不拍");
 }
 
 async function renderHot(tab) {
   setNav("hot");
   main.innerHTML = `<p class="kicker">OSSA</p>
     <h1 class="mast">先选项，再拍写</h1>
-    <p class="sub">系统给建议，你来选。选中的才是一份活。</p>
+    <p class="sub">每天约 10 条可选题，每条有理由。你选中的才是一份活。</p>
     <div class="hook cold">正在拉今天的选题池…</div>
     <div class="skel-grid" aria-hidden="true"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>`;
 
@@ -323,7 +323,7 @@ async function renderHot(tab) {
   main.innerHTML = `
     <p class="kicker">${esc(home.companyName || "OSSA")} · 不管账号</p>
     <h1 class="mast">先选项，再拍写</h1>
-    <p class="sub">约 10 条可选题，每条有理由。选这个才变成活；种成主题不立刻拍。</p>
+    <p class="sub">约 10 条可选题，每条有理由。选这个，变一份活；种成主题，先放着。</p>
     <div class="hook ${home.hookReady ? "" : "cold"}">${esc(home.hook || home.coldStart)}</div>
     <div class="meta-row">
       <span>${esc(timeAgo(home.fetchedAt))}</span>
@@ -343,8 +343,8 @@ async function renderHot(tab) {
           : ""
     }</div>
     <div class="must">${must || `<div class="empty"><p>${esc(home.coldStart)}</p></div>`}</div>
-    ${pins ? `<div class="section-label">最近钉过的借鉴</div><div class="pins">${pins}</div>` : ""}
-    <div class="section-label">原料货架 · 点开再看，热搜不是进门画面</div>
+    ${pins ? `<div class="section-label">最近钉进来的借鉴</div><div class="pins">${pins}</div>` : ""}
+    <div class="section-label">原料货架 · 热搜只是原料，不是选题</div>
     <div class="tabs">${tabs}</div>
     <div id="pane"></div>
   `;
@@ -367,7 +367,7 @@ async function renderTab(tab) {
   const pane = $("#pane");
   if (!pane) return;
   if (!tab) {
-    pane.innerHTML = `<div class="empty"><h2>原料先收着</h2><p>先在上面选一张，或写一句话开工。货架按怎么逛来切：舞台、案例、讨论、节点、订阅、对标。不按美妆、职场、地产开格子。你的领域贴进订阅和对标，或种成长期主题。</p></div>`;
+    pane.innerHTML = `<div class="empty"><h2>货架先收着</h2><p>先在上面选一张，或写一句话开工。货架按怎么找选题来切：舞台、案例、讨论、节点、订阅、对标，不按美妆、职场、地产开格子。你认的领域贴进订阅和对标，或种成长期主题。</p></div>`;
     return;
   }
   if (tab === "platform") return renderPlatform(pane);
@@ -548,7 +548,7 @@ async function renderEngine() {
   main.innerHTML = `
     <p class="kicker">数据引擎</p>
     <h1 class="mast" style="font-size:28px">所有源的开关都在这</h1>
-    <p class="sub">接上了，原料货架才有今天的数。测不通就说实话，不要填假榜。</p>
+    <p class="sub">接上了，原料货架才有今天的数。测不通就说实话，不填假榜。</p>
     <form class="engine" id="engineForm">
       <section class="block">
         <h2>60s 热榜</h2>
@@ -566,7 +566,7 @@ async function renderEngine() {
       <section class="block">
         <h2>RSS 订阅</h2>
         <div class="field">
-          <label for="rss">每行一个：名字 | 地址。你领域的源贴这里：美妆贴美妆，地产贴地产。营销圈案例进「案例」格，其余进「订阅」格。少数派 / 36氪 / IT之家 / V2EX / Product Hunt 已预置。</label>
+          <label for="rss">每行一个：名字 | 地址。你领域的源贴这里；营销圈成品进「案例」，其余进「订阅」。已预置：少数派 / 36氪 / IT之家 / V2EX / Product Hunt。</label>
           <textarea id="rss" rows="5">${esc(
             (s.rssFeeds || []).map((f) => `${f.name} | ${f.url}`).join("\n"),
           )}</textarea>
@@ -779,7 +779,7 @@ async function renderTopic(id) {
 
     <section class="block">
       <h2>可切的方向</h2>
-      <p class="muted">先选一份活，再出方向。三个方向必须不同。点选一条，下面才是切口、标题、Hook 和可拍细节。</p>
+      <p class="muted">先选一份活，再出方向；三个方向必须不同。点选一条，才出切口、标题、Hook 和可拍细节。</p>
       ${
         t.topicIdeas?.length
           ? `<div class="ideas">${t.topicIdeas.map((idea, i) => ideaCard(idea, i, i === (t.selectedIndex ?? 0))).join("")}</div>${ideaDetail(selected)}`
@@ -847,7 +847,7 @@ async function renderTasks() {
   main.innerHTML = `
     <p class="kicker">进行中的活</p>
     <h1 class="mast" style="font-size:28px">桌上这些活</h1>
-    <p class="sub">从灵感里选出来的。卡片上能看出切了哪条、有没有拍法和稿。</p>
+    <p class="sub">从选题池选出来、已经立起来的。卡片上标着切了哪条、有没有拍法和稿。</p>
     <div class="board" id="board"></div>
   `;
   const board = $("#board");
@@ -943,7 +943,7 @@ async function renderSettings() {
       </section>
       <section class="block">
         <h2>大模型</h2>
-        <p class="muted" style="margin-bottom:12px">选题、如何拍、如何走这里。默认 Agnes。Key 只存在本机，不要发到对话框。</p>
+        <p class="muted" style="margin-bottom:12px">选题、如何拍、如何写都走这里。默认 Agnes。Key 只存在本机，别发进对话框。</p>
         <div class="field"><label for="llmBase">Base URL</label><input id="llmBase" value="${esc(s.llmBaseUrl || "https://apihub.agnes-ai.com/v1")}" /></div>
         <div class="field"><label for="llmKey">API Key</label>
           <div class="pw-wrap">
@@ -1076,7 +1076,7 @@ async function renderThemes() {
   main.innerHTML = `
     <p class="kicker">长期主题</p>
     <h1 class="mast" style="font-size:28px">种下的题，下次还长</h1>
-    <p class="sub">这不是账号。高价值的话题种在这儿。拆成子主题是下一步；现在可以从一棵树上开工。</p>
+    <p class="sub">高价值的话题种在这儿，先放着不拍。拆成子主题是下一步；现在可以直接从一棵树上开工。</p>
     <form class="start" id="plantForm">
       <label class="sr" for="plantLine">种一个主题</label>
       <input id="plantLine" maxlength="80" placeholder="一句话种一个主题，比如：把一次做砸的事写成对照" autocomplete="off" />
@@ -1120,7 +1120,7 @@ async function renderTheme(id) {
     <p class="kicker"><a href="#/themes">长期主题</a> · ${esc(t.status === "paused" ? "已停用" : "在长")}</p>
     <h1 class="mast" style="font-size:28px">${esc(t.title)}</h1>
     <p class="sub">${esc(t.by || "未署名")} · 种于 ${(t.plantedAt || "").slice(0, 10)} · 来自「${esc(t.fromTitle || t.title)}」</p>
-    <div class="banner">拆成 10 个子主题、20 个角度是下一步。现在可以从这开工，变成一份活。</div>
+    <div class="banner">拆成 10 个子主题、20 个角度是下一步；现在就能从这开工，先变一份活。</div>
     ${t.summary ? `<section class="block"><h2>种下时的理由</h2><p>${esc(t.summary)}</p></section>` : ""}
     <div class="actions">
       <button class="btn" id="fromTheme">从这开工</button>
@@ -1179,7 +1179,7 @@ async function renderGate() {
     <div class="gate-stage">
       <img src="/desk.jpg" width="1600" height="900" alt="" />
       <h1>先选项，再拍写</h1>
-      <p>每人一份工作台。活、主题、密钥只有你看见。热榜是公共货架，桌上的选题跟着你的领域走。</p>
+      <p>每人一份工作台，活、主题、密钥只有你看见。别人管账号，你只管这一份活；热榜是公共货架，选题跟着你认的领域偏。</p>
     </div>
     <form class="gate-card" id="gateForm">
       <h1>${isReg ? "建一个自己的工作台" : "进来干活"}</h1>
