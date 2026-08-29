@@ -31,6 +31,8 @@ import {
   type Situation,
   type TopicIdea,
 } from "./topic";
+import { clampFieldWant, mixFields, skipAsHomeHot, type FieldOrigin } from "./pool";
+import { hitMatchesQuery, queryKey, runDig, type Dig, type RawHit } from "./dig";
 
 const ROOT = join(import.meta.dir, "..");
 const PUBLIC = join(import.meta.dir, "public");
@@ -106,7 +108,7 @@ type Theme = {
   plantedAt: string;
   by: string;
 };
-type Store = { settings: Settings; pins: Pin[]; tasks: Task[]; themes: Theme[] };
+type Store = { settings: Settings; pins: Pin[]; tasks: Task[]; themes: Theme[]; digs: Dig[] };
 
 const DEFAULT_FEEDS: RssFeed[] = [
   { id: "digitaling", name: "数英", url: "https://www.digitaling.com/rss", enabled: true, group: "marketing" },
@@ -211,7 +213,7 @@ function emptyStore(): Store {
   return {
     settings: {
       sixtyBase: "http://127.0.0.1:4399",
-      mustReadCount: 10,
+      mustReadCount: 5,
       refreshMinutes: 30,
       lowFanFollowers: 10000,
       lowFanLikes: 1000,
@@ -233,6 +235,7 @@ function emptyStore(): Store {
     pins: [],
     tasks: [],
     themes: [],
+    digs: [],
   };
 }
 
@@ -261,6 +264,7 @@ async function readStore(): Promise<Store> {
   store.settings.rssFeeds = store.settings.rssFeeds || [];
   store.tasks = (store.tasks || []).map(migrateTask);
   store.themes = store.themes || [];
+  store.digs = store.digs || [];
   for (const feed of DEFAULT_FEEDS) {
     if (!store.settings.rssFeeds.some((f) => f.url === feed.url || f.id === feed.id)) {
       store.settings.rssFeeds.push(feed);
@@ -475,7 +479,7 @@ async function sixty(store: Store, path: string) {
   return fetchJson(`${base}${path}`);
 }
 
-type InspirationOrigin = "hot" | "case" | "news" | "tech" | "evergreen" | "custom";
+type InspirationOrigin = FieldOrigin;
 
 type SignalItem = {
   id: string;
@@ -495,6 +499,7 @@ type SignalItem = {
   matchedTheme?: string;
   matchedDomain?: string;
   execOpen?: string;
+  line?: string;
 };
 
 function whyDo(kind: string) {
@@ -522,7 +527,9 @@ function whyDo(kind: string) {
 
 const ORIGIN_LABEL: Record<InspirationOrigin, string> = {
   hot: "热搜",
+  talk: "讨论",
   case: "案例",
+  node: "节点",
   news: "快报",
   tech: "科技",
   evergreen: "常青",
@@ -583,83 +590,8 @@ function upcomingNodes(withinDays = 60) {
   });
 }
 
-const EVERGREEN: Array<{ title: string; open: string; do: string; why: string }> = [
-  { title: "今天我看见的这件事，别人不在场", open: "我在现场。下面只讲我看见的，不讲热搜授权过的。", do: "现场", why: "没流量也能做，靠你看见了什么" },
-  { title: "那个被问了十遍的问题，今天一次答完", open: "这个问题我被问了十遍。今天只答一次，你听完就能用。", do: "答疑", why: "搜索和提问比热搜更稳" },
-  { title: "我把一次做砸的事写成对照", open: "上次我把这件事做砸了。对照今天，代价是具体的。", do: "复盘", why: "对照比口号有画面" },
-  { title: "行业人人都这么说，我反过来讲", open: "这句默认的话我先不信。反过来讲，经不经得起追问你自己听。", do: "反常识", why: "反转本身就是切口" },
-  { title: "别人刚做成的，我只拆这一处", open: "我不跟热度。别人做成了，我只拆能搬走的那一处结构。", do: "拆方法", why: "方法可迁移，热度不可复制" },
-  { title: "我改一个变量，把前后结果拍给你看", open: "同一件事，我只改一个变量。过程比结论更可跟。", do: "实验", why: "过程比结论更可跟" },
-  { title: "你会的那一步，我拆成外人能跟的", open: "卡在门口的人不是笨，是没人把这一步拆开。我拆给你。", do: "教程", why: "步骤本身就是内容" },
-  { title: "客户原话说完，我只往下扩这一句", open: "这句话不是我编的。原话在先，我只往下扩你听得懂的部分。", do: "原话", why: "证据在对方嘴里" },
-  { title: "写给三年前的自己：最容易走错的那一步", open: "三年前的我，最容易在这一步走错。今天只写这一步，和一个补救。", do: "书信", why: "时间差就是戏剧" },
-  { title: "同一件事，我写成短视频、小红书、公众号三版", open: "不是三个身份。同一件事，三种格式，你对号拿走。", do: "改写", why: "格式跟这份活走，不跟人设走" },
-];
-
-function firstSentence(text: string, max = 36) {
-  const t = String(text || "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  const cut = t.match(/^.{8,40}?[。！？!?]/);
-  if (cut) return cut[0].replace(/^[“"']|[”"']$/g, "").trim();
-  return t.slice(0, max).trim();
-}
-
-function withDomainSlot(text: string, domain: string) {
-  if (!domain) return text;
-  if (text.includes("这件事") || text.includes("这个问题") || text.includes("这一处") || text.includes("这一步")) {
-    return text
-      .replace("这件事", `「${domain}」这件事`)
-      .replace("这个问题", `「${domain}」这个问题`)
-      .replace("这一处", `「${domain}」这一处`)
-      .replace("那一处", `「${domain}」那一处`)
-      .replace("这一步", `「${domain}」这一步`);
-  }
-  return text;
-}
-
-function toExecutable(item: SignalItem, origin: InspirationOrigin, domains: string[] = []): { title: string; open: string } {
-  const domain = domains[0] || "";
-  const rawTitle = String(item.title || "").trim();
-  const rawOpen = String(item.execOpen || "").trim();
-  if (origin === "evergreen") {
-    return { title: withDomainSlot(rawTitle, domain), open: withDomainSlot(rawOpen || String(item.why || ""), domain) };
-  }
-  if (origin === "hot") {
-    const short = rawTitle.length > 22 ? rawTitle.slice(0, 22) : rawTitle;
-    return {
-      title: `这件事我只讲一句：${short}`,
-      open: `先别刷评论。开口就说：${short}。听完你就能用，我不复述榜单。`,
-    };
-  }
-  if (origin === "case") {
-    const bit = firstSentence(item.summary, 28) || rawTitle.slice(0, 28);
-    return {
-      title: `只拆这一处：${rawTitle.length > 18 ? rawTitle.slice(0, 18) : rawTitle}`,
-      open: `别人已经做成了。我只搬结构，不搬热度。原文是：${bit}`,
-    };
-  }
-  if (origin === "node") {
-    return {
-      title: rawTitle.includes("今天") || rawTitle.includes("天后") ? rawTitle : `${rawTitle}，我提前把内容占上`,
-      open: firstSentence(item.summary || item.why || "", 40) || `${rawTitle}会挤在同一天。我提前拍，不跟那天的人挤。`,
-    };
-  }
-  if (origin === "custom") {
-    return { title: rawTitle, open: rawOpen || firstSentence(item.summary, 40) || rawTitle };
-  }
-  const lead = firstSentence(item.summary, 32);
-  return {
-    title: rawTitle,
-    open: lead ? `今天这条，我只讲你会用到的一句：${lead}` : `今天这条我只讲一句：${rawTitle}。听完就能用。`,
-  };
-}
-
 function markOrigin(items: SignalItem[], origin: InspirationOrigin): SignalItem[] {
   return items.map((item) => ({ ...item, origin, originLabel: ORIGIN_LABEL[origin] }));
-}
-
-function skipAsHomeHot(title: string) {
-  return /遇难|死亡|地震|泥石流|空难|溃坝|爆炸|伤亡|受灾|救援|灾区|山洪|洪水|杀害|杀人|遇害|身亡|事故|触电|人祸|招聘会|遗体|火化/.test(title);
 }
 
 function themeGroups(themes: Theme[]) {
@@ -725,81 +657,6 @@ function withDomainMatch(items: SignalItem[], domains: string[]): SignalItem[] {
       matchedDomain: matchDomain(`${item.title} ${item.summary || ""} ${item.source || ""}`, domains),
     }))
     .sort((a, b) => Number(Boolean(b.matchedDomain)) - Number(Boolean(a.matchedDomain)));
-}
-
-function pickEvergreen(n: number, batch = 0): SignalItem[] {
-  const day = Math.floor(Date.now() / 86400000);
-  const start = (day + batch * 2) % EVERGREEN.length;
-  const out: SignalItem[] = [];
-  const used = new Set<string>();
-  for (let i = 0; out.length < n && i < EVERGREEN.length * 2; i++) {
-    const row = EVERGREEN[(start + i) % EVERGREEN.length];
-    if (used.has(row.title)) continue;
-    used.add(row.title);
-    out.push(
-      stamp("evergreen", {
-        id: `ever:${row.title}`,
-        rank: 0,
-        title: row.title,
-        url: "",
-        summary: row.summary,
-        cover: "",
-        heat: 0,
-        source: "常青",
-        publishedAt: "",
-        why: row.why,
-        do: row.do,
-        execOpen: row.open,
-        summary: row.open,
-      }),
-    );
-  }
-  return markOrigin(out, "evergreen").map((item) => {
-    const row = EVERGREEN.find((x) => x.title === item.title);
-    return row ? { ...item, why: row.why, do: row.do, execOpen: row.open, summary: row.open } : item;
-  });
-}
-
-function mixInspirations(
-  pools: Array<{ origin: InspirationOrigin; items: SignalItem[]; cap: number }>,
-  want: number,
-  batch = 0,
-  domains: string[] = [],
-): SignalItem[] {
-  const used = new Set<string>();
-  const out: SignalItem[] = [];
-  const keyOf = (title: string) => title.replace(/\s+/g, "").slice(0, 22);
-  const take = (item: SignalItem | undefined, origin: InspirationOrigin) => {
-    if (!item?.title || out.length >= want) return;
-    const key = keyOf(item.title);
-    if (used.has(key)) return;
-    used.add(key);
-    const exec = toExecutable({ ...item, origin }, origin, domains);
-    out.push({
-      ...item,
-      origin,
-      originLabel: ORIGIN_LABEL[origin],
-      title: exec.title,
-      execOpen: exec.open,
-      why: exec.open,
-      summary: item.summary || item.title,
-    });
-  };
-  pickEvergreen(2, batch).forEach((item) => take(item, "evergreen"));
-  let round = 0;
-  while (out.length < want && round < 8) {
-    for (const pool of pools) {
-      const taken = out.filter((x) => x.origin === pool.origin).length;
-      if (taken >= pool.cap) continue;
-      take(pool.items[round + batch], pool.origin);
-      if (out.length >= want) break;
-    }
-    round++;
-  }
-  if (out.length < Math.min(5, want)) {
-    pickEvergreen(7, batch + 1).forEach((item) => take(item, "evergreen"));
-  }
-  return out.slice(0, want);
 }
 
 function stamp(kind: string, item: SignalItem): SignalItem {
@@ -872,6 +729,37 @@ function itemsFromSixty(platform: string, parsed: { code?: number; data?: unknow
 
 function mapHot(platform: string, raw: unknown) {
   return itemsFromSixty(platform, raw as { code?: number; data?: unknown; message?: string });
+}
+
+async function socialHits(store: Store, query: string): Promise<RawHit[]> {
+  const platforms: Array<{ id: string; path: string }> = [
+    { id: "weibo", path: "/v2/weibo" },
+    { id: "zhihu", path: "/v2/zhihu" },
+    { id: "douyin", path: "/v2/douyin" },
+    { id: "bili", path: "/v2/bili" },
+  ];
+  const rows = await Promise.all(platforms.map((p) => sixty(store, p.path)));
+  const hits: RawHit[] = [];
+  platforms.forEach((p, i) => {
+    const raw = rows[i];
+    if (!raw.ok) return;
+    try {
+      for (const it of mapHot(p.id, JSON.parse(raw.body)).items) {
+        if (!it.title || !it.url || !hitMatchesQuery(it.title, query)) continue;
+        hits.push({
+          title: it.title,
+          url: it.url,
+          publishedAt: it.publishedAt,
+          sourceName: it.source || p.id,
+          summary: it.summary || "",
+          imageUrl: it.cover || "",
+        });
+      }
+    } catch {
+      /* 这一路热榜挂了就跳过 */
+    }
+  });
+  return hits;
 }
 
 async function githubTrending() {
@@ -1194,6 +1082,9 @@ Sitemap: ${origin}/sitemap.xml
         if (body.formats) {
           next.formats = body.formats.length ? body.formats : ["short_video", "xhs", "wechat"];
         }
+        if (body.mustReadCount !== undefined) {
+          next.mustReadCount = clampFieldWant(Number(body.mustReadCount));
+        }
         next.llmBaseUrl = (body.llmBaseUrl || store.settings.llmBaseUrl || AGNES_BASE).replace(/\/$/, "");
         next.llmModel = body.llmModel || store.settings.llmModel || AGNES_CHAT_MODEL;
         next.llmModels = body.llmModels?.length ? body.llmModels : store.settings.llmModels;
@@ -1372,15 +1263,93 @@ Sitemap: ${origin}/sitemap.xml
         });
       }
 
+      if (path === "/api/digs") {
+        const store = await readStore();
+        return json({
+          items: (store.digs || []).map((d) => ({
+            id: d.id,
+            query: d.query,
+            fetchedAt: d.fetchedAt,
+            cardCount: d.cardCount,
+            newCount: d.newCount,
+          })),
+        });
+      }
+
+      if (path === "/api/dig" && req.method === "GET") {
+        const store = await readStore();
+        const q = url.searchParams.get("q") || "";
+        const key = queryKey(q);
+        const dig = key ? store.digs.find((d) => d.queryKey === key) : store.digs[0] || null;
+        return json({ dig: dig || null });
+      }
+
+      if (path === "/api/dig" && req.method === "POST") {
+        const store = await readStore();
+        const body = (await req.json()) as { query?: string };
+        const q = String(body.query || "").trim();
+        if (!q) return json({ ok: false, error: "先写一个公开事件" }, 400);
+        const prev = store.digs.find((d) => d.queryKey === queryKey(q)) || null;
+        const extras = await socialHits(store, q);
+        const dig = await runDig(q, prev, extras);
+        store.digs = [dig, ...store.digs.filter((d) => d.queryKey !== dig.queryKey)].slice(0, 24);
+        await writeStore(store);
+        return json({ ok: dig.cardCount > 0, error: dig.error, dig });
+      }
+
+      if (path === "/api/dig/layout" && req.method === "POST") {
+        const store = await readStore();
+        const body = (await req.json()) as { id?: string; cards?: Array<{ id: string; x: number; y: number }> };
+        const dig = store.digs.find((d) => d.id === body.id);
+        if (!dig) return json({ ok: false, error: "找不到这场地图" }, 404);
+        const pos = new Map((body.cards || []).map((c) => [c.id, c]));
+        dig.cards = dig.cards.map((c) => {
+          const next = pos.get(c.id);
+          return next ? { ...c, x: next.x, y: next.y } : c;
+        });
+        await writeStore(store);
+        return json({ ok: true });
+      }
+
+      if (path === "/api/dig/note" && req.method === "POST") {
+        const store = await readStore();
+        const body = (await req.json()) as { id?: string; title?: string; x?: number; y?: number };
+        const dig = store.digs.find((d) => d.id === body.id);
+        if (!dig) return json({ ok: false, error: "找不到这场地图" }, 404);
+        const title = String(body.title || "").trim();
+        if (!title) return json({ ok: false, error: "便签要写一句" }, 400);
+        const now = new Date().toISOString();
+        dig.cards.push({
+          id: `note:${Date.now()}`,
+          kind: "note",
+          title,
+          url: "",
+          sourceName: "便签",
+          publishedAt: now,
+          summary: title,
+          keywords: [],
+          imageUrl: "",
+          stance: "报道",
+          x: Number(body.x) || 120,
+          y: Number(body.y) || 900,
+          firstSeenAt: now,
+          lastSeenAt: now,
+          isNew: true,
+        });
+        dig.cardCount = dig.cards.length;
+        await writeStore(store);
+        return json({ ok: true, dig });
+      }
+
       if (path === "/api/home") {
         const store = await readStore();
         const batch = Math.max(0, Number(url.searchParams.get("batch") || 0) || 0);
-        const [douyinRaw, biliRaw, rednoteRaw, weiboRaw, aihot, rss] = await Promise.all([
+        const [douyinRaw, biliRaw, rednoteRaw, weiboRaw, zhihuRaw, rss] = await Promise.all([
           sixty(store, "/v2/douyin"),
           sixty(store, "/v2/bili"),
           sixty(store, "/v2/rednote"),
           sixty(store, "/v2/weibo"),
-          aihotItems(),
+          sixty(store, "/v2/zhihu"),
           rssItems(store, "marketing"),
         ]);
         const parseSixty = (raw: { ok: boolean; body: string }, platform: string) => {
@@ -1391,13 +1360,13 @@ Sitemap: ${origin}/sitemap.xml
             return [] as SignalItem[];
           }
         };
-        const weiboOk = rednoteRaw.ok || douyinRaw.ok || biliRaw.ok || weiboRaw.ok;
-        const wantRaw = Number(store.settings.mustReadCount || 10);
-        const want = wantRaw >= 8 && wantRaw <= 10 ? wantRaw : 10;
+        const weiboOk = rednoteRaw.ok || douyinRaw.ok || biliRaw.ok || weiboRaw.ok || zhihuRaw.ok;
+        const want = clampFieldWant(store.settings.mustReadCount);
         const groups = themeGroups(store.themes || []);
         const domains = parseDomainNeedles(store.settings.niche, store.themes || []);
+        const dropDisaster = (items: SignalItem[]) => items.filter((it) => !skipAsHomeHot(it.title));
         const cleanHot = (items: SignalItem[]) => {
-          let next = items.filter((it) => !skipAsHomeHot(it.title));
+          let next = dropDisaster(items);
           if (groups.length) {
             next = next.filter((it) => matchTheme(`${it.title} ${it.summary || ""}`, groups));
           }
@@ -1408,39 +1377,29 @@ Sitemap: ${origin}/sitemap.xml
           cleanHot(parseSixty(douyinRaw, "douyin")),
           cleanHot(parseSixty(biliRaw, "bili")),
         ];
-        const secondaryHot = cleanHot(parseSixty(weiboRaw, "weibo"));
         const hotPool: SignalItem[] = [];
-        primaryHot.forEach((bucket) => {
-          if (bucket[0]) hotPool.push(bucket[0]);
-        });
-        if (secondaryHot[0]) hotPool.push(secondaryHot[0]);
-        for (let i = 1; i < 12; i++) {
+        for (let i = 0; i < 12; i++) {
           for (const bucket of primaryHot) {
             if (bucket[i]) hotPool.push(bucket[i]);
           }
         }
-        secondaryHot.slice(1).forEach((it) => hotPool.push(it));
+        const talkPool = dropDisaster([...parseSixty(zhihuRaw, "zhihu"), ...parseSixty(weiboRaw, "weibo")]);
         const cases = withDomainMatch(
-          withThemeMatch(markOrigin(rss.items, "case"), groups).sort(
+          withThemeMatch(markOrigin(rss.items as SignalItem[], "case"), groups).sort(
             (a, b) => Number(Boolean(b.matchedTheme)) - Number(Boolean(a.matchedTheme)),
           ),
           domains,
         );
-        const news = withDomainMatch(withThemeMatch(markOrigin(aihot.items, "news"), groups), domains);
         const hots = withDomainMatch(withThemeMatch(markOrigin(hotPool, "hot"), groups), domains);
-        const inspirations = mixInspirations(
-          [
-            { origin: "hot", items: hots, cap: 4 },
-            { origin: "case", items: cases, cap: 2 },
-            { origin: "news", items: news, cap: 2 },
-          ],
+        const talks = withDomainMatch(withThemeMatch(markOrigin(talkPool, "talk"), groups), domains);
+        const inspirations = mixFields({
+          hot: hots,
+          talk: talks,
+          cases,
+          nodes: upcomingNodes(21),
           want,
           batch,
-          domains,
-        ).map((item) => ({
-          ...item,
-          line: `可直接发 · ${item.originLabel || ORIGIN_LABEL[item.origin || "evergreen"]}`,
-        }));
+        }) as SignalItem[];
 
         const OPEN = new Set(["judge", "need_evidence", "adopted", "making"]);
         const openJobs = store.tasks
@@ -1458,9 +1417,18 @@ Sitemap: ${origin}/sitemap.xml
         if (openJobs.length) {
           hookParts.push(`桌上还有 ${openJobs.length} 份活没收`);
           hookParts.push(`先把「${openJobs[0].title.slice(0, 18)}${openJobs[0].title.length > 18 ? "…" : ""}」收完`);
-        } else if (inspirations.length) {
-          hookParts.push(`今天选题池 ${inspirations.length} 条`);
-          hookParts.push(`先看「${inspirations[0].title.slice(0, 18)}${inspirations[0].title.length > 18 ? "…" : ""}」`);
+        } else {
+          const fields = inspirations.filter((it) => it.origin !== "evergreen");
+          const top = (fields[0] || inspirations[0]) as SignalItem | undefined;
+          if (fields.length) {
+            hookParts.push(`今天 ${fields.length} 场可进`);
+            if (top?.title) {
+              hookParts.push(`先看「${top.title.slice(0, 18)}${top.title.length > 18 ? "…" : ""}」`);
+            }
+          } else if (top?.title) {
+            hookParts.push("先从常青开工");
+            hookParts.push(`先看「${top.title.slice(0, 18)}${top.title.length > 18 ? "…" : ""}」`);
+          }
         }
         const planted = (store.themes || []).filter((t) => t.status !== "paused").length;
         if (planted) hookParts.push(`已种 ${planted} 个长期主题`);
@@ -1480,7 +1448,7 @@ Sitemap: ${origin}/sitemap.xml
           domains,
           domainFilterOn: domains.length > 0,
           weiboOk,
-          aihotOk: aihot.ok,
+          aihotOk: false,
           rssOk: rss.ok,
           operatorName: store.settings.operatorName,
           companyName: store.settings.companyName,

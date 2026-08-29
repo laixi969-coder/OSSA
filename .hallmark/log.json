@@ -1,0 +1,22 @@
+[
+  {
+    "date": "2026-08-29",
+    "macrostructure": "Workbench",
+    "theme": "Newsprint",
+    "theme_axes": "light / roman-serif / cool",
+    "enrichment": "none",
+    "scope": "app",
+    "nav": "N3",
+    "brief": "Drop warm-stone/cork; cool newsprint paper + indigo accent"
+  },
+  {
+    "date": "2026-08-29",
+    "macrostructure": "Workbench",
+    "theme": "Almanac-warm-stone",
+    "theme_axes": "light / roman-serif / warm",
+    "enrichment": "none",
+    "scope": "app",
+    "nav": "N3",
+    "brief": "OSSA workbench restyle + 考古 map/diagram evidence chain"
+  }
+]

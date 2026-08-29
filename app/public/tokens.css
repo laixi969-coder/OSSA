@@ -1,0 +1,74 @@
+/* Hallmark · genre: editorial · macrostructure: Workbench · theme: Newsprint
+ * designed-as-app · design-system: design.md
+ * paper-band: light · display-style: roman-serif · accent-hue: cool
+ */
+:root {
+  --color-paper: oklch(95.5% 0.006 250);
+  --color-paper-2: oklch(99% 0.003 250);
+  --color-paper-3: oklch(93% 0.008 250);
+  --color-ink: oklch(18% 0.02 260);
+  --color-ink-2: oklch(40% 0.018 260);
+  --color-ink-3: oklch(50% 0.014 260);
+  --color-rule: oklch(78% 0.012 250 / 0.5);
+  --color-accent: oklch(42% 0.14 255);
+  --color-accent-ink: oklch(98% 0.004 250);
+  --color-accent-soft: oklch(42% 0.14 255 / 0.12);
+  --color-accent-line: oklch(42% 0.14 255 / 0.3);
+  --color-focus: oklch(42% 0.14 255);
+  --color-up: oklch(50% 0.08 155);
+  --color-down: oklch(52% 0.15 25);
+  --color-warn: oklch(58% 0.12 75);
+  --color-warn-ink: oklch(42% 0.08 75);
+  --color-rail: oklch(16% 0.014 260);
+  --color-rail-2: oklch(21% 0.014 260);
+  --color-rail-ink: oklch(64% 0.016 250);
+  --color-rail-ink-active: oklch(96% 0.006 250);
+  --color-map: oklch(91.5% 0.008 250);
+  --color-map-2: oklch(93.8% 0.006 250);
+  --color-card: oklch(99% 0.003 250);
+  --color-note: oklch(94% 0.02 240);
+  --color-pin: oklch(42% 0.14 255);
+  --color-rel-report: oklch(42% 0.14 255);
+  --color-rel-quote: oklch(50% 0.08 155);
+  --color-rel-repost: oklch(55% 0.12 75);
+  --color-rel-remix: oklch(45% 0.08 295);
+  --color-rel-business: oklch(45% 0.06 220);
+  --color-dot: oklch(20% 0.02 260 / 0.08);
+  --color-lane-rule: oklch(20% 0.02 260 / 0.14);
+  --color-axis: oklch(99% 0.003 250 / 0.72);
+  --color-label: oklch(99% 0.003 250 / 0.9);
+
+  --font-display: "Songti SC", "STSong", "Noto Serif SC", "Songti", serif;
+  --font-body: "PingFang SC", "Hiragino Sans GB", "Avenir Next", "Segoe UI", sans-serif;
+  --font-outlier: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-display: clamp(1.75rem, 2vw + 1rem, 2.25rem);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+
+  --radius-card: 20px;
+  --radius-pill: 999px;
+  --radius-input: 12px;
+  --rule: 1px;
+}

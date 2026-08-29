@@ -243,6 +243,7 @@ function actionsHtml(item) {
   return `<div class="actions">
     <button class="btn" data-topic>选这个</button>
     <button class="btn ghost" data-plant>种成长期主题</button>
+    <button class="btn ghost" data-dig>事件地图</button>
     ${open}
     ${pin}
   </div>`;
@@ -252,6 +253,9 @@ function bindCard(el, item) {
   el.querySelector("[data-pin]")?.addEventListener("click", () => pinItem(item));
   el.querySelector("[data-topic]")?.addEventListener("click", () => toTopic(item));
   el.querySelector("[data-plant]")?.addEventListener("click", () => plantTheme(item));
+  el.querySelector("[data-dig]")?.addEventListener("click", () => {
+    location.hash = `#/dig?q=${encodeURIComponent(item.title || "")}`;
+  });
 }
 
 async function plantTheme(item) {
@@ -274,8 +278,8 @@ async function renderHot(tab) {
   setNav("hot");
   main.innerHTML = `<p class="kicker">OSSA</p>
     <h1 class="mast">先选项，再拍写</h1>
-    <p class="sub">每天约 10 条可选题，每条有理由。你选中的才是一份活。</p>
-    <div class="hook cold">正在拉今天的选题池…</div>
+    <p class="sub">当下大家都在谈的场。选这个是进场，切口点进去再出。</p>
+    <div class="hook cold">正在拉今天的场…</div>
     <div class="skel-grid" aria-hidden="true"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>`;
 
   const batch = Number(sessionStorage.getItem("ossa-batch") || 0);
@@ -323,7 +327,7 @@ async function renderHot(tab) {
   main.innerHTML = `
     <p class="kicker">${esc(home.companyName || "OSSA")} · 不管账号</p>
     <h1 class="mast">先选项，再拍写</h1>
-    <p class="sub">约 10 条可选题，每条有理由。选这个，变一份活；种成主题，先放着。</p>
+    <p class="sub">当下大家都在谈的场。选这个是进场，不是跟榜；种成主题，先放着。</p>
     <div class="hook ${home.hookReady ? "" : "cold"}">${esc(home.hook || home.coldStart)}</div>
     <div class="meta-row">
       <span>${esc(timeAgo(home.fetchedAt))}</span>
@@ -335,7 +339,7 @@ async function renderHot(tab) {
       <input id="startLine" name="line" maxlength="120" placeholder="一句话开工，不必从热搜里长出来" autocomplete="off" />
       <button class="btn" type="submit">开工</button>
     </form>
-    <div class="section-label">今日选题池${
+    <div class="section-label">今日选题池 · 选场，切口点进去再出${
       home.domainFilterOn
         ? ` · 已按领域「${esc((home.domains || []).join("、"))}」偏过`
         : home.themeFilterOn
@@ -928,7 +932,7 @@ async function renderSettings() {
         <p class="muted" style="margin-bottom:12px">不填也能开工。这不是账号档案，不管你有几个号。判断默认只看这一份活。</p>
         <div class="field"><label for="company">公司 / 组名（可选）</label><input id="company" value="${esc(s.companyName || "")}" /></div>
         <div class="field"><label for="who">我的名字（钉子会记上，可选）</label><input id="who" value="${esc(s.operatorName || "")}" placeholder="例如 小周" /></div>
-        <div class="field"><label for="niche">你认的领域，最多 1 到 3 个（可选）</label><input id="niche" value="${esc(s.niche || "")}" placeholder="例如 地产, 品牌。逗号分开。不填也能开工，填了选题池往这边偏" /></div>
+        <div class="field"><label for="niche">你认的领域，最多 1 到 3 个（可选）</label><input id="niche" value="${esc(s.niche || "")}" placeholder="例如 地产, 品牌。逗号分开。不填也能开工，填了选题池往这边偏，不硬清空" /></div>
         <div class="field"><label for="persona">这一次怎么说话（可选）</label><input id="persona" value="${esc(s.persona || "")}" placeholder="不是人设档案，只是这次的语气" /></div>
         <div class="field"><label for="audience">这一次拍给谁（可选）</label><input id="audience" value="${esc(s.audience || "")}" placeholder="谁会看" /></div>
         <div class="field">
@@ -965,7 +969,7 @@ async function renderSettings() {
       </section>
       <section class="block">
         <h2>刷新和阈值</h2>
-        <div class="field"><label for="n">选题池条数（8～10）</label><input id="n" type="number" min="8" max="10" value="${s.mustReadCount >= 8 ? s.mustReadCount : 10}" /></div>
+        <div class="field"><label for="n">选题池场数（3～5，不含临近节点）</label><input id="n" type="number" min="3" max="5" value="${s.mustReadCount >= 3 && s.mustReadCount <= 5 ? s.mustReadCount : 5}" /></div>
         <div class="field"><label for="r">刷新间隔（分钟）</label><input id="r" type="number" min="5" max="180" value="${s.refreshMinutes}" /></div>
         <div class="field"><label for="f">低粉阈值 · 粉丝低于</label><input id="f" type="number" value="${s.lowFanFollowers}" /></div>
         <div class="field"><label for="l">低粉阈值 · 单篇赞高于</label><input id="l" type="number" value="${s.lowFanLikes}" /></div>
@@ -1179,7 +1183,7 @@ async function renderGate() {
     <div class="gate-stage">
       <img src="/desk.jpg" width="1600" height="900" alt="" />
       <h1>先选项，再拍写</h1>
-      <p>每人一份工作台，活、主题、密钥只有你看见。别人管账号，你只管这一份活；热榜是公共货架，选题跟着你认的领域偏。</p>
+      <p>每人一份工作台，活、主题、密钥只有你看见。别人管账号，你只管这一份活；热榜是公共货架，选题池选的是场，跟着你认的领域偏。</p>
     </div>
     <form class="gate-card" id="gateForm">
       <h1>${isReg ? "建一个自己的工作台" : "进来干活"}</h1>
@@ -1283,6 +1287,485 @@ async function renderGate() {
   await loadCaptcha();
 }
 
+const DIG_KIND = {
+  news: "新闻",
+  post: "帖子",
+  meme: "表情包",
+  image: "图片",
+  note: "便签",
+  derivative: "衍生品",
+};
+const DIG_REL = { report: "报道", quote: "引用", repost: "转发", remix: "二创", business: "商业" };
+const DIG_LANES = [
+  { id: "news", kinds: ["news"], label: "新闻简报", y: 36, h: 220 },
+  { id: "post", kinds: ["post"], label: "社交帖子", y: 256, h: 200 },
+  { id: "visual", kinds: ["meme", "image"], label: "表情包 / 图片", y: 456, h: 200 },
+  { id: "derivative", kinds: ["derivative"], label: "衍生品", y: 656, h: 200 },
+  { id: "note", kinds: ["note"], label: "便签", y: 856, h: 220 },
+];
+
+async function renderDig() {
+  main.classList.add("wide");
+  const q0 = route().query.get("q") || "孙宇晨 景甜";
+  main.innerHTML = `<div class="dig-page">
+    <header class="dig-chrome">
+      <form class="dig-bar" id="digForm">
+        <label class="sr" for="digQuery">公开事件</label>
+        <input id="digQuery" name="q" maxlength="80" value="${esc(q0)}" placeholder="任意公开事件，例如 孙宇晨 景甜" />
+        <button class="btn" type="submit" id="digGo">铺开</button>
+        <button class="btn ghost" type="button" id="digRefresh">更新</button>
+        <div class="dig-tools">
+          <button class="btn ghost" type="button" id="digFit">看全场</button>
+          <button class="btn ghost" type="button" id="digZoomOut" aria-label="缩小">−</button>
+          <button class="btn ghost" type="button" id="digZoomIn" aria-label="放大">+</button>
+        </div>
+      </form>
+      <p class="dig-read">左早右晚 · 横排是种类 · 点一张卡，只亮它的线绳</p>
+      <div class="hook cold" id="digHook">输入事件，点铺开。墙只铺公开结果，搜不到的类型空着。</div>
+      <div class="dig-legend" id="digLegend"></div>
+      <div class="dig-focus" id="digFocus" hidden></div>
+    </header>
+    <div class="dig-stage">
+      <div class="dig-lane-rail" id="digLaneRail" aria-hidden="true"></div>
+      <div class="dig-empty" id="digEmpty">
+        <h2>怎么看这张图</h2>
+        <ol>
+          <li>输入公开事件，点铺开</li>
+          <li>时间从左到右铺开</li>
+          <li>横排分种类：新闻、帖子、梗图、衍生品</li>
+          <li>线绳是关系：报道、引用、转发、二创、商业</li>
+          <li>点一张卡，只亮它连着的线</li>
+        </ol>
+        <p>搜不到的类型空着，不编假卡。更新只补新卡，不推倒重来。</p>
+      </div>
+      <div class="dig-wall" id="digWall" tabindex="0">
+        <div class="dig-world" id="digWorld">
+          <div class="dig-axis" id="digAxis"></div>
+          <div id="digLanes"></div>
+          <svg class="dig-lines" id="digLines"></svg>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  let dig = null;
+  let pan = { x: 48, y: 20 };
+  let zoom = 0.78;
+  let saving = false;
+  let selectedId = "";
+  const kindOn = { news: true, post: true, meme: true, image: true, note: true, derivative: true };
+  const relOn = { report: true, quote: true, repost: true, remix: true, business: true };
+
+  const visibleCards = () => (dig?.cards || []).filter((c) => kindOn[c.kind] !== false);
+  const cardShown = (card) => card && kindOn[card.kind] !== false;
+
+  const paintLaneRail = () => {
+    const rail = $("#digLaneRail");
+    if (!rail) return;
+    if (!dig?.cardCount) {
+      rail.innerHTML = "";
+      return;
+    }
+    rail.innerHTML = DIG_LANES.map((lane) => {
+      const top = pan.y + lane.y * zoom + 8;
+      if (top < -24 || top > 1200) return "";
+      return `<span style="top:${Math.round(top)}px">${esc(lane.label)}</span>`;
+    }).join("");
+  };
+
+  const paintTransform = () => {
+    const world = $("#digWorld");
+    if (world) world.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+    paintLaneRail();
+  };
+
+  const setZoom = (next) => {
+    zoom = Math.min(1.6, Math.max(0.42, next));
+    paintTransform();
+  };
+
+  const fitAll = () => {
+    const wall = $("#digWall");
+    const cards = visibleCards();
+    if (!wall || !cards.length) {
+      pan = { x: 48, y: 20 };
+      zoom = 0.78;
+      paintTransform();
+      return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    cards.forEach((c) => {
+      minX = Math.min(minX, c.x);
+      minY = Math.min(minY, c.y);
+      maxX = Math.max(maxX, c.x + 220);
+      maxY = Math.max(maxY, c.y + 160);
+    });
+    const box = wall.getBoundingClientRect();
+    const pad = 56;
+    const sx = (box.width - pad * 2) / Math.max(maxX - minX, 240);
+    const sy = (box.height - pad * 2) / Math.max(maxY - minY, 180);
+    zoom = Math.min(1.15, Math.max(0.42, Math.min(sx, sy)));
+    pan.x = Math.round(pad - minX * zoom);
+    pan.y = Math.round(pad - minY * zoom);
+    paintTransform();
+  };
+
+  const paintLanes = () => {
+    const host = $("#digLanes");
+    if (!host) return;
+    host.innerHTML = DIG_LANES.map(
+      (lane) => `<div class="dig-lane" style="top:${lane.y}px;height:${lane.h}px"></div>`,
+    ).join("");
+  };
+
+  const paintAxis = () => {
+    const axis = $("#digAxis");
+    if (!axis || !dig?.cardCount) {
+      if (axis) axis.innerHTML = "";
+      return;
+    }
+    const early = dig.earliestAt ? String(dig.earliestAt).slice(0, 10) : "";
+    const late = dig.newestAt ? String(dig.newestAt).slice(0, 10) : "";
+    const ticks = [];
+    if (early) ticks.push({ x: 72, label: early });
+    if (late && late !== early) ticks.push({ x: 1952, label: late });
+    if (early && late && early !== late) {
+      const a = Date.parse(dig.earliestAt);
+      const b = Date.parse(dig.newestAt);
+      if (Number.isFinite(a) && Number.isFinite(b) && b > a) {
+        const mid = new Date((a + b) / 2).toISOString().slice(0, 10);
+        ticks.splice(1, 0, { x: 1012, label: mid });
+      }
+    }
+    axis.innerHTML = ticks
+      .map((t) => `<span class="dig-tick" style="left:${t.x}px">${esc(t.label)}</span>`)
+      .join("");
+  };
+
+  const drawLines = () => {
+    const svg = $("#digLines");
+    if (!svg || !dig) return;
+    const cards = dig.cards || [];
+    const byId = Object.fromEntries(cards.map((c) => [c.id, c]));
+    const linked = new Set();
+    if (selectedId) {
+      linked.add(selectedId);
+      (dig.links || []).forEach((ln) => {
+        if (ln.fromId === selectedId || ln.toId === selectedId) {
+          linked.add(ln.fromId);
+          linked.add(ln.toId);
+        }
+      });
+    }
+    const parts = (dig.links || [])
+      .map((ln) => {
+        if (relOn[ln.relation] === false) return "";
+        const a = byId[ln.fromId];
+        const b = byId[ln.toId];
+        if (!cardShown(a) || !cardShown(b)) return "";
+        const x1 = a.x + 110;
+        const y1 = a.y + 10;
+        const x2 = b.x + 110;
+        const y2 = b.y + 10;
+        const mx = (x1 + x2) / 2;
+        const my = Math.min(y1, y2) - 48;
+        const tx = 0.25 * x1 + 0.5 * mx + 0.25 * x2;
+        const ty = Math.max(56, 0.25 * y1 + 0.5 * my + 0.25 * y2);
+        const dim = selectedId && !linked.has(ln.fromId) ? " is-dim" : selectedId && linked.has(ln.fromId) ? " is-on" : "";
+        const labelDim = selectedId && !linked.has(ln.fromId) ? " is-dim" : "";
+        return `<path class="rel-${esc(ln.relation)}${dim}" d="M${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}" />
+          <text class="${labelDim}" x="${tx}" y="${ty - 4}" text-anchor="middle">${esc(DIG_REL[ln.relation] || ln.relation)}</text>`;
+      })
+      .join("");
+    svg.innerHTML = parts;
+    svg.setAttribute("viewBox", "0 0 2400 1400");
+  };
+
+  const paintFocus = () => {
+    const box = $("#digFocus");
+    if (!box) return;
+    if (!selectedId || !dig) {
+      box.hidden = true;
+      box.textContent = "";
+      return;
+    }
+    const card = (dig.cards || []).find((c) => c.id === selectedId);
+    if (!card) {
+      box.hidden = true;
+      return;
+    }
+    const links = (dig.links || []).filter(
+      (ln) => (ln.fromId === selectedId || ln.toId === selectedId) && relOn[ln.relation] !== false,
+    );
+    const rels = [...new Set(links.map((ln) => DIG_REL[ln.relation] || ln.relation))];
+    box.hidden = false;
+    box.textContent = links.length
+      ? `这条是「${card.stance}」· 连了 ${links.length} 条线绳：${rels.join("、")}`
+      : `这条是「${card.stance}」· 还没有连上别的卡`;
+  };
+
+  const paintLegend = () => {
+    const el = $("#digLegend");
+    if (!el) return;
+    const cards = dig?.cards || [];
+    const kindBits = Object.keys(DIG_KIND)
+      .map((k) => {
+        const n = cards.filter((c) => c.kind === k).length;
+        if (!n && k !== "news") return "";
+        return `<button type="button" class="dig-chip ${kindOn[k] ? "on" : "off"}" data-kind="${k}">${esc(DIG_KIND[k])}${n ? " " + n : ""}</button>`;
+      })
+      .join("");
+    const relBits = Object.keys(DIG_REL)
+      .map(
+        (k) =>
+          `<button type="button" class="dig-chip rel-${k} ${relOn[k] ? "on" : "off"}" data-rel="${k}"><i class="sw"></i>${esc(DIG_REL[k])}</button>`,
+      )
+      .join("");
+    const ago = dig?.fetchedAt ? `<span class="leg-k">${esc(timeAgo(dig.fetchedAt).replace("上次刷新", "上次搜过"))}</span>` : "";
+    const gaps = (dig?.gaps || []).map((g) => `<span class="leg-k">${esc(g)}</span>`).join("");
+    el.innerHTML = `<span class="leg-k">种类</span>${kindBits}<span class="leg-k">线绳</span>${relBits}${ago}${gaps}`;
+    el.querySelectorAll("[data-kind]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        kindOn[btn.dataset.kind] = !kindOn[btn.dataset.kind];
+        paintCards();
+        paintLegend();
+      });
+    });
+    el.querySelectorAll("[data-rel]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        relOn[btn.dataset.rel] = !relOn[btn.dataset.rel];
+        drawLines();
+        paintLegend();
+        paintFocus();
+      });
+    });
+  };
+
+  const paintCards = () => {
+    const world = $("#digWorld");
+    if (!world) return;
+    [...world.querySelectorAll(".ev-card")].forEach((n) => n.remove());
+    const linked = new Set();
+    if (selectedId && dig) {
+      linked.add(selectedId);
+      (dig.links || []).forEach((ln) => {
+        if (ln.fromId === selectedId || ln.toId === selectedId) {
+          linked.add(ln.fromId);
+          linked.add(ln.toId);
+        }
+      });
+    }
+    visibleCards().forEach((card) => {
+      const el = document.createElement("article");
+      const dim = selectedId && !linked.has(card.id);
+      el.className = `ev-card kind-${card.kind}${card.isNew ? " is-new" : ""}${card.stale ? " is-stale" : ""}${card.id === selectedId ? " is-on" : ""}${dim ? " is-dim" : ""}`;
+      el.style.left = `${card.x}px`;
+      el.style.top = `${card.y}px`;
+      el.dataset.id = card.id;
+      const img = card.imageUrl ? coverHtml(card.imageUrl, "ev-cover") : "";
+      const open = card.url
+        ? `<a class="btn ghost" href="${esc(card.url)}" target="_blank" rel="noopener">原文</a>`
+        : "";
+      el.innerHTML = `<i class="pin" aria-hidden="true"></i>
+        <div class="ev-k">${esc(DIG_KIND[card.kind] || card.kind)} · ${esc(card.stance || "")}${card.isNew ? " · 新到" : ""}</div>
+        <h3>${esc(card.title)}</h3>
+        <p>${esc(card.summary || "")}</p>
+        ${img}
+        <div class="ev-src">${esc(card.sourceName || "")}${card.publishedAt ? " · " + esc(String(card.publishedAt).slice(0, 10)) : ""}</div>
+        <div class="actions">
+          ${open}
+          <button class="btn" data-topic>选这个</button>
+        </div>`;
+      world.appendChild(el);
+      el.querySelector("[data-topic]")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toTopic({
+          title: card.title,
+          url: card.url,
+          source: card.sourceName,
+          originLabel: "事件地图",
+          summary: card.summary,
+          cover: card.imageUrl,
+        });
+      });
+      bindDrag(el, card);
+    });
+    drawLines();
+    paintFocus();
+  };
+
+  const selectCard = (id) => {
+    selectedId = selectedId === id ? "" : id;
+    paintCards();
+  };
+
+  const bindDrag = (el, card) => {
+    let drag = null;
+    let moved = 0;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("a,button")) return;
+      e.stopPropagation();
+      el.setPointerCapture(e.pointerId);
+      moved = 0;
+      drag = { x: e.clientX, y: e.clientY, ox: card.x, oy: card.y };
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
+      if (moved < 6) return;
+      card.x = Math.round(drag.ox + dx / zoom);
+      card.y = Math.round(drag.oy + dy / zoom);
+      el.style.left = `${card.x}px`;
+      el.style.top = `${card.y}px`;
+      drawLines();
+    });
+    const end = async () => {
+      if (!drag || !dig) return;
+      const wasDrag = moved >= 6;
+      drag = null;
+      if (!wasDrag) {
+        selectCard(card.id);
+        return;
+      }
+      if (saving) return;
+      saving = true;
+      await api("/api/dig/layout", {
+        method: "POST",
+        body: JSON.stringify({
+          id: dig.id,
+          cards: (dig.cards || []).map((c) => ({ id: c.id, x: c.x, y: c.y })),
+        }),
+      });
+      saving = false;
+    };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  };
+
+  const paintHook = () => {
+    const hook = $("#digHook");
+    const empty = $("#digEmpty");
+    if (!hook) return;
+    const hasCards = Boolean(dig?.cardCount);
+    if (empty) empty.hidden = hasCards;
+    if (!hasCards) {
+      hook.className = "hook cold";
+      hook.textContent = dig?.error || "输入任意公开事件，点铺开。墙只铺搜到的结果。";
+      return;
+    }
+    hook.className = "hook";
+    const n = dig.newCount ? ` · 新到 ${dig.newCount} 张` : "";
+    const early = dig.earliestAt ? String(dig.earliestAt).slice(0, 10) : "";
+    const late = dig.newestAt ? String(dig.newestAt).slice(0, 10) : "";
+    const span = early && late && early !== late ? `${early} → ${late}` : early;
+    hook.textContent = `这场 ${dig.cardCount} 张证据 · ${dig.linkCount} 条线绳${n}${span ? " · " + span : ""}`;
+  };
+
+  const paintAll = (shouldFit) => {
+    paintHook();
+    paintLanes();
+    paintAxis();
+    paintLegend();
+    paintCards();
+    if (shouldFit) fitAll();
+    else paintTransform();
+  };
+
+  const run = async (query) => {
+    const go = $("#digGo");
+    if (go) {
+      go.disabled = true;
+      go.classList.add("busy");
+      go.dataset.state = "loading";
+    }
+    toast("正在搜公开结果…");
+    const data = await api("/api/dig", { method: "POST", body: JSON.stringify({ query }) });
+    if (go) {
+      go.disabled = false;
+      go.classList.remove("busy");
+      delete go.dataset.state;
+    }
+    if (data.dig) {
+      dig = data.dig;
+      selectedId = "";
+      if (location.hash.indexOf("/dig") === 1) {
+        history.replaceState(null, "", `#/dig?q=${encodeURIComponent(dig.query)}`);
+      }
+      paintAll(true);
+      if (!dig.cardCount) toast(dig.error || "这一轮没搜到");
+      else toast(dig.newCount ? `补上 ${dig.newCount} 张` : `铺上 ${dig.cardCount} 张`);
+    } else toast(data.error || "这场没铺开");
+  };
+
+  paintLanes();
+  const loaded = await api(`/api/dig?q=${encodeURIComponent(q0)}`);
+  if (loaded.dig) {
+    dig = loaded.dig;
+    $("#digQuery").value = dig.query || q0;
+    paintAll(Boolean(dig.cardCount));
+  } else {
+    paintAll(false);
+  }
+
+  $("#digForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = $("#digQuery")?.value.trim();
+    if (!q) return toast("先写一个公开事件");
+    run(q);
+  });
+  $("#digRefresh").addEventListener("click", () => {
+    const q = $("#digQuery")?.value.trim() || dig?.query;
+    if (!q) return toast("先写一个公开事件");
+    run(q);
+  });
+  $("#digFit")?.addEventListener("click", fitAll);
+  $("#digZoomIn")?.addEventListener("click", () => setZoom(zoom * 1.12));
+  $("#digZoomOut")?.addEventListener("click", () => setZoom(zoom * 0.9));
+
+  const wall = $("#digWall");
+  let panDrag = null;
+  wall.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".ev-card")) return;
+    if (selectedId) {
+      selectedId = "";
+      paintCards();
+    }
+    wall.setPointerCapture(e.pointerId);
+    panDrag = { x: e.clientX, y: e.clientY, ox: pan.x, oy: pan.y };
+  });
+  wall.addEventListener("pointermove", (e) => {
+    if (!panDrag) return;
+    pan.x = panDrag.ox + (e.clientX - panDrag.x);
+    pan.y = panDrag.oy + (e.clientY - panDrag.y);
+    paintTransform();
+  });
+  wall.addEventListener("pointerup", () => {
+    panDrag = null;
+  });
+  wall.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      setZoom(zoom * (e.deltaY > 0 ? 0.92 : 1.08));
+    },
+    { passive: false },
+  );
+  wall.addEventListener("keydown", (e) => {
+    if (e.key === "+" || e.key === "=") setZoom(zoom * 1.12);
+    if (e.key === "-" || e.key === "_") setZoom(zoom * 0.9);
+    if (e.key === "0") fitAll();
+    if (e.key === "Escape" && selectedId) {
+      selectedId = "";
+      paintCards();
+    }
+  });
+}
+
 async function render() {
   if (!currentUser) {
     const me = await api("/api/auth/me");
@@ -1294,7 +1777,9 @@ async function render() {
     $("#gateRoot")?.remove();
   }
   paintUser();
+  main.classList.remove("wide");
   const r = route();
+  if (r.view === "dig") return renderDig();
   if (r.view === "engine") return renderEngine();
   if (r.view === "themes" && r.tab) return renderTheme(decodeURIComponent(r.tab));
   if (r.view === "themes") return renderThemes();
