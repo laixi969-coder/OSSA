@@ -18,6 +18,13 @@ function toast(text) {
   setTimeout(() => toastEl.classList.remove("show"), 2800);
 }
 
+function skelHtml(kind = "cards", n = 4) {
+  if (kind === "rows") {
+    return `<div class="skel-list" aria-hidden="true">${`<div class="skel row"></div>`.repeat(n)}</div>`;
+  }
+  return `<div class="skel-grid" aria-hidden="true">${`<div class="skel"></div>`.repeat(n)}</div>`;
+}
+
 function friendlyError(text) {
   const s = String(text || "");
   if (/JSON Parse|Unexpected token|Unrecognized token|not valid JSON/i.test(s)) {
@@ -69,7 +76,26 @@ function coverSrc(url) {
 
 function coverHtml(url, cls = "cover") {
   if (!url) return "";
-  return `<img class="${cls}" src="${esc(coverSrc(url))}" alt="" onerror="this.remove()">`;
+  return `<img class="${cls}" src="${esc(coverSrc(url))}" alt="" width="640" height="360" decoding="async" onerror="this.remove()">`;
+}
+
+function bindChineseValidity(form) {
+  if (!form) return;
+  form.addEventListener(
+    "invalid",
+    (e) => {
+      const el = e.target;
+      if (!el.setCustomValidity) return;
+      if (el.validity.valueMissing) el.setCustomValidity("请填这一项");
+      else if (el.validity.typeMismatch) el.setCustomValidity("这一项格式不对");
+      else if (el.validity.tooShort) el.setCustomValidity("至少 8 位");
+      else el.setCustomValidity("");
+    },
+    true,
+  );
+  form.addEventListener("input", (e) => {
+    e.target.setCustomValidity?.("");
+  });
 }
 
 function route() {
@@ -77,6 +103,63 @@ function route() {
   const [path, query] = hash.split("?");
   const parts = path.split("/").filter(Boolean);
   return { view: parts[0] || "hot", tab: parts[1] || "", query: new URLSearchParams(query || "") };
+}
+
+function userLabel(user) {
+  const name = String(user?.name || "").trim();
+  if (name) return name;
+  return String(user?.email || "").split("@")[0] || "用户";
+}
+
+function userInitial(user) {
+  const label = userLabel(user);
+  if (/^\d+$/.test(label)) return label.slice(-2);
+  return label.slice(0, 1).toUpperCase();
+}
+
+function avatarStyle(user) {
+  const s = String(user?.email || user?.id || "ossa");
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const hue = [16, 28, 148, 188, 210, 262, 330][(h >>> 0) % 7];
+  return `background:hsl(${hue} 42% 38%)`;
+}
+
+function paintUser() {
+  const slot = $("#userSlot");
+  if (!slot) return;
+  if (!currentUser) {
+    slot.innerHTML = "";
+    return;
+  }
+  const admin = currentUser.role === "admin";
+  slot.innerHTML = `
+    <a class="user-chip" href="#/settings" title="打开设置">
+      <span class="user-avatar" style="${avatarStyle(currentUser)}">${esc(userInitial(currentUser))}</span>
+      <span>
+        <b>${esc(userLabel(currentUser))}</b>
+        <small>${esc(currentUser.email || "")}</small>
+        ${admin ? `<small class="user-role">超级管理员</small>` : ""}
+      </span>
+    </a>
+    <div class="user-actions">
+      <a class="btn ghost" href="#/settings">资料</a>
+      <button class="btn ghost" type="button" id="railLogout">退出</button>
+    </div>
+    <p style="padding:0 10px"><a href="/about.html">关于 OSSA</a></p>
+  `;
+  $("#railLogout")?.addEventListener("click", logoutNow);
+}
+
+async function logoutNow() {
+  await api("/api/auth/logout", { method: "POST", body: "{}" });
+  currentUser = null;
+  gateMode = "login";
+  paintUser();
+  renderGate();
 }
 
 function setNav(view) {
@@ -192,7 +275,8 @@ async function renderHot(tab) {
   main.innerHTML = `<p class="kicker">OSSA</p>
     <h1 class="mast">先选项，再拍写</h1>
     <p class="sub">系统给建议，你来选。选中的才是一份活。</p>
-    <div class="hook cold">正在拉今天的选题池…</div>`;
+    <div class="hook cold">正在拉今天的选题池…</div>
+    <div class="skel-grid" aria-hidden="true"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>`;
 
   const batch = Number(sessionStorage.getItem("ossa-batch") || 0);
   const home = await api(`/api/home?batch=${batch}`);
@@ -210,7 +294,7 @@ async function renderHot(tab) {
 
   const must = cards
     .map(
-      (item) => `<article>
+      (item, i) => `<article style="--i:${i}">
         ${coverHtml(item.cover)}
         <div class="pad">
         <div class="line">${esc(item.line || item.originLabel || item.do || "")}</div>
@@ -268,6 +352,7 @@ async function renderHot(tab) {
     sessionStorage.setItem("ossa-batch", String(batch + 1));
     render();
   });
+  bindChineseValidity($("#startForm"));
   $("#startForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const title = $("#startLine")?.value.trim();
@@ -282,7 +367,7 @@ async function renderTab(tab) {
   const pane = $("#pane");
   if (!pane) return;
   if (!tab) {
-    pane.innerHTML = `<div class="empty"><h2>原料先收着</h2><p>先在上面选一张，或写一句话开工。货架按怎么逛来切：舞台、案例、讨论、节点、订阅、对标。不按美妆、职场、地产开格子——你的领域贴进订阅和对标，或种成长期主题。</p></div>`;
+    pane.innerHTML = `<div class="empty"><h2>原料先收着</h2><p>先在上面选一张，或写一句话开工。货架按怎么逛来切：舞台、案例、讨论、节点、订阅、对标。不按美妆、职场、地产开格子。你的领域贴进订阅和对标，或种成长期主题。</p></div>`;
     return;
   }
   if (tab === "platform") return renderPlatform(pane);
@@ -312,7 +397,7 @@ async function renderRankBoard(pane, platforms, two) {
   async function fill(sel, target) {
     const platform = $(sel).value;
     const box = $(target);
-    box.innerHTML = `<p style="padding:16px;color:var(--ink-3)">正在拉 ${PLATFORMS.find((p) => p.id === platform)?.name}…</p>`;
+    box.innerHTML = skelHtml("rows", 6);
     const data = await api(`/api/hot?platform=${platform}`);
     if (!data.ok) {
       box.innerHTML = `<div class="empty" style="margin:12px;max-width:none"><p>${esc(data.error)}</p></div>`;
@@ -352,7 +437,7 @@ async function renderTalk(pane) {
 }
 
 async function renderNodes(pane) {
-  pane.innerHTML = `<p style="color:var(--ink-3)">正在看接下来两个月的日子…</p>`;
+  pane.innerHTML = skelHtml("cards", 4);
   const data = await api("/api/nodes");
   const items = data.items || [];
   if (!items.length) {
@@ -376,7 +461,7 @@ async function renderNodes(pane) {
 }
 
 async function renderAi(pane) {
-  pane.innerHTML = `<p style="color:var(--ink-3)">正在拉 AI 快报…</p>`;
+  pane.innerHTML = skelHtml("cards", 4);
   const data = await api("/api/aihot");
   if (!data.ok) {
     pane.innerHTML = `<div class="empty"><h2>AIHOT 暂时连不上</h2><p>稍后再刷。不要编新闻。</p></div>`;
@@ -399,7 +484,7 @@ async function renderAi(pane) {
 }
 
 async function renderBundle(pane, path, emptyText) {
-  pane.innerHTML = `<p style="color:var(--ink-3)">正在拉…</p>`;
+  pane.innerHTML = skelHtml("cards", 4);
   const data = await api(path);
   if (!data.ok) {
     pane.innerHTML = `<div class="empty"><h2>${esc(emptyText)}</h2><p>${esc(data.error || "")}</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
@@ -430,7 +515,7 @@ async function renderBundle(pane, path, emptyText) {
 }
 
 async function renderRss(pane) {
-  pane.innerHTML = `<p style="color:var(--ink-3)">正在拉案例…</p>`;
+  pane.innerHTML = skelHtml("cards", 4);
   const data = await api("/api/rss?group=marketing");
   if (!data.ok) {
     pane.innerHTML = `<div class="empty"><h2>案例还没稿</h2><p>${esc(data.error)}</p><p>默认是营销圈成品。你领域的案例源去数据引擎贴，不要等产品开一格美妆或职场。</p><a class="btn" href="#/engine">去数据引擎</a></div>`;
@@ -647,7 +732,7 @@ function draftHtml(pack) {
 
 async function renderTopic(id) {
   setNav("tasks");
-  main.innerHTML = `<p class="kicker">选题卡</p><p class="sub">正在打开…</p>`;
+  main.innerHTML = `<p class="kicker">选题卡</p>${skelHtml("cards", 2)}`;
   const data = await api(`/api/topics/${encodeURIComponent(id)}`);
   if (!data.ok || !data.task) {
     main.innerHTML = `<div class="empty"><h2>找不到这条选题</h2><p>${esc(data.error || "")}</p><a class="btn" href="#/tasks">回看板</a></div>`;
@@ -812,7 +897,7 @@ async function renderReview() {
     <p class="kicker">月度复盘</p>
     <h1 class="mast" style="font-size:28px">你这个月钉了什么</h1>
     ${
-      n
+      n || m
         ? `<div class="must">
             <article class="pad-card"><div class="line">钉子</div><h3 class="num">${n}</h3><p>本机记下的借鉴</p></article>
             <article class="pad-card"><div class="line">活</div><h3 class="num">${m}</h3><p>已经立起来的活</p></article>
@@ -830,7 +915,13 @@ async function renderSettings() {
   main.innerHTML = `
     <p class="kicker">设置</p>
     <h1 class="mast" style="font-size:28px">可选备注，不是进门问卷</h1>
-    <p class="sub">登录邮箱 ${esc(currentUser?.email || "")} · 只看见你自己的活</p>
+    <div class="account-card">
+      <span class="user-avatar" style="${avatarStyle(currentUser)}">${esc(userInitial(currentUser))}</span>
+      <div>
+        <p><b>${esc(userLabel(currentUser))}</b></p>
+        <p class="muted">${esc(currentUser?.email || "")}${currentUser?.role === "admin" ? " · 超级管理员，别人看不见你的工作台" : " · 只看见你自己的活"}</p>
+      </div>
+    </div>
     <form class="engine" id="setForm">
       <section class="block">
         <h2>这次可能用得上的背景</h2>
@@ -887,6 +978,7 @@ async function renderSettings() {
       </section>
     </form>
   `;
+  bindChineseValidity($("#setForm"));
   $("#setForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const formats = [...document.querySelectorAll("#fmtChecks input:checked")].map((el) => el.value);
@@ -904,16 +996,14 @@ async function renderSettings() {
     };
     Object.assign(payload, llmForm());
     await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+    if (currentUser) currentUser.name = payload.operatorName;
+    paintUser();
     toast("已保存");
   });
   $("#syncModels")?.addEventListener("click", syncModels);
   $("#pingLlm")?.addEventListener("click", pingLlm);
   bindPasswordEye($("#llmKey"), $("#llmEye"));
-  $("#logoutBtn")?.addEventListener("click", async () => {
-    await api("/api/auth/logout", { method: "POST", body: "{}" });
-    currentUser = null;
-    renderGate();
-  });
+  $("#logoutBtn")?.addEventListener("click", logoutNow);
 }
 
 const KIND_LABEL = { chat: "对话", image: "图像", video: "视频" };
@@ -989,7 +1079,7 @@ async function renderThemes() {
     <p class="sub">这不是账号。高价值的话题种在这儿。拆成子主题是下一步；现在可以从一棵树上开工。</p>
     <form class="start" id="plantForm">
       <label class="sr" for="plantLine">种一个主题</label>
-      <input id="plantLine" maxlength="80" placeholder="一句话种一个主题，比如：德芙联名翻车怎么讲" autocomplete="off" />
+      <input id="plantLine" maxlength="80" placeholder="一句话种一个主题，比如：把一次做砸的事写成对照" autocomplete="off" />
       <button class="btn" type="submit">种下</button>
     </form>
     ${
@@ -1008,6 +1098,7 @@ async function renderThemes() {
         : `<div class="empty"><h2>还没有长期主题</h2><p>从今天的选题池点「种成长期主题」，或在上面写一句。没种的时候，选题池不过滤。</p><a class="btn" href="#/hot">回今天</a></div>`
     }
   `;
+  bindChineseValidity($("#plantForm"));
   $("#plantForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const title = $("#plantLine")?.value.trim();
@@ -1085,22 +1176,38 @@ async function renderGate() {
   }
   const isReg = gateMode === "register";
   root.innerHTML = `<div class="gate">
+    <div class="gate-stage">
+      <img src="/desk.jpg" width="1600" height="900" alt="" />
+      <h1>先选项，再拍写</h1>
+      <p>每人一份工作台。活、主题、密钥只有你看见。热榜是公共货架，桌上的选题跟着你的领域走。</p>
+    </div>
     <form class="gate-card" id="gateForm">
-      <p class="kicker">OSSA</p>
       <h1>${isReg ? "建一个自己的工作台" : "进来干活"}</h1>
-      <p class="sub">${isReg ? "每人一份活，互相看不见。邮箱只用来登录，不会发信。" : "登录后只看见你自己的选题和活。"}</p>
+      <p class="sub">${isReg ? "邮箱只用来登录，不会发信。密码输两次，避免打错。" : "登录后只看见你自己的选题和活。"}</p>
       <div class="tabs" style="margin:0 0 16px">
         <button type="button" class="${isReg ? "" : "on"}" id="toLogin">登录</button>
         <button type="button" class="${isReg ? "on" : ""}" id="toReg">注册</button>
       </div>
       <div class="field"><label for="gateEmail">邮箱</label><input id="gateEmail" type="email" autocomplete="username" required /></div>
       <div class="field">
-        <label for="gatePassword">密码${isReg ? "（至少 8 位）" : ""}</label>
+        <label for="gatePassword">密码</label>
         <div class="pw-wrap">
-          <input id="gatePassword" type="password" autocomplete="${isReg ? "new-password" : "current-password"}" required />
+          <input id="gatePassword" type="password" autocomplete="${isReg ? "new-password" : "current-password"}" required minlength="8" />
           <button class="pw-toggle" type="button" id="pwEye">查看</button>
         </div>
+        ${isReg ? `<p class="hint">至少 8 位</p>` : ""}
       </div>
+      ${
+        isReg
+          ? `<div class="field">
+        <label for="gatePassword2">再输一次密码</label>
+        <div class="pw-wrap">
+          <input id="gatePassword2" type="password" autocomplete="new-password" required minlength="8" />
+          <button class="pw-toggle" type="button" id="pwEye2">查看</button>
+        </div>
+      </div>`
+          : ""
+      }
       <div class="honeypot" aria-hidden="true"><input id="gateWebsite" tabindex="-1" autocomplete="off" /></div>
       <div class="field">
         <label for="captchaAnswer">验证码</label>
@@ -1110,11 +1217,13 @@ async function renderGate() {
           <button class="btn ghost" type="button" id="captchaRefresh">换一张</button>
         </div>
       </div>
-      <p class="gate-err" id="gateErr"></p>
+      <p class="gate-err" id="gateErr" role="alert"></p>
       <button class="btn" type="submit">${isReg ? "注册并进入" : "登录"}</button>
     </form>
   </div>`;
   bindPasswordEye($("#gatePassword"), $("#pwEye"));
+  bindPasswordEye($("#gatePassword2"), $("#pwEye2"));
+  bindChineseValidity($("#gateForm"));
   $("#toLogin")?.addEventListener("click", () => {
     gateMode = "login";
     renderGate();
@@ -1127,21 +1236,39 @@ async function renderGate() {
   $("#gateForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const err = $("#gateErr");
+    const submit = $("#gateForm button[type=submit]");
     err.textContent = "";
+    const password = $("#gatePassword").value;
+    const passwordConfirm = $("#gatePassword2")?.value ?? "";
+    if (isReg && password !== passwordConfirm) {
+      err.textContent = "两次密码不一致";
+      return;
+    }
     const payload = {
       email: $("#gateEmail").value.trim(),
-      password: $("#gatePassword").value,
+      password,
+      passwordConfirm,
       captchaId: captcha.id,
       captchaAnswer: $("#captchaAnswer").value.trim(),
       website: $("#gateWebsite").value,
       startedAt: captcha.startedAt,
     };
+    if (submit) {
+      submit.disabled = true;
+      submit.classList.add("busy");
+      submit.textContent = isReg ? "正在建…" : "正在进…";
+    }
     const data = await api(isReg ? "/api/auth/register" : "/api/auth/login", {
       method: "POST",
       body: JSON.stringify(payload),
     });
     if (!data.ok) {
       err.textContent = data.error || "没成功";
+      if (submit) {
+        submit.disabled = false;
+        submit.classList.remove("busy");
+        submit.textContent = isReg ? "注册并进入" : "登录";
+      }
       await loadCaptcha();
       return;
     }
@@ -1150,6 +1277,7 @@ async function renderGate() {
     document.body.classList.remove("gated");
     const shell = document.querySelector(".app");
     if (shell) shell.hidden = false;
+    paintUser();
     render();
   });
   await loadCaptcha();
@@ -1165,6 +1293,7 @@ async function render() {
     if (shell) shell.hidden = false;
     $("#gateRoot")?.remove();
   }
+  paintUser();
   const r = route();
   if (r.view === "engine") return renderEngine();
   if (r.view === "themes" && r.tab) return renderTheme(decodeURIComponent(r.tab));

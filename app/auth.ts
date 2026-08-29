@@ -12,10 +12,13 @@ const CAPTCHA_MS = 8 * 60 * 1000;
 const LOCK_AFTER = 8;
 const LOCK_MS = 15 * 60 * 1000;
 
+export const ADMIN_EMAIL = "66445039@qq.com";
+
 export type AuthUser = {
   id: string;
   email: string;
   passwordHash: string;
+  role: "admin" | "user";
   createdAt: string;
   failedLogins: number;
   lockedUntil: string;
@@ -39,7 +42,8 @@ async function readAccounts(): Promise<AccountsFile> {
   if (!(await file.exists())) return { users: [], sessions: [] };
   try {
     const data = JSON.parse(await file.text()) as AccountsFile;
-    return { users: data.users || [], sessions: data.sessions || [] };
+    const users = (data.users || []).map((u) => ({ ...u, role: userRole(u.email, u.role) }));
+    return { users, sessions: data.sessions || [] };
   } catch {
     return { users: [], sessions: [] };
   }
@@ -87,6 +91,14 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+export function isAdminEmail(email: string) {
+  return normalizeEmail(email) === ADMIN_EMAIL;
+}
+
+function userRole(email: string, role?: AuthUser["role"]): AuthUser["role"] {
+  return isAdminEmail(email) || role === "admin" ? "admin" : "user";
+}
+
 function emailOk(email: string) {
   return /^[^\s@]{1,64}@[^\s@]{1,80}\.[^\s@]{2,24}$/.test(email);
 }
@@ -130,7 +142,12 @@ export async function readSession(req: Request) {
 }
 
 export function publicUser(user: AuthUser) {
-  return { id: user.id, email: user.email, createdAt: user.createdAt };
+  return {
+    id: user.id,
+    email: user.email,
+    createdAt: user.createdAt,
+    role: userRole(user.email, user.role),
+  };
 }
 
 export function workspacePath(userId: string) {
@@ -140,9 +157,18 @@ export function workspacePath(userId: string) {
 export async function ensureWorkspace(userId: string, inheritLegacy: boolean) {
   await mkdir(WORKSPACES, { recursive: true });
   const dest = workspacePath(userId);
-  if (await Bun.file(dest).exists()) return dest;
+  const exists = await Bun.file(dest).exists();
   if (inheritLegacy && (await Bun.file(LEGACY_STORE).exists())) {
-    await Bun.write(dest, await Bun.file(LEGACY_STORE).text());
+    let empty = !exists;
+    if (exists) {
+      try {
+        const cur = JSON.parse(await Bun.file(dest).text()) as { tasks?: unknown[] };
+        empty = !(cur.tasks || []).length;
+      } catch {
+        empty = true;
+      }
+    }
+    if (empty) await Bun.write(dest, await Bun.file(LEGACY_STORE).text());
     return dest;
   }
   return dest;
@@ -192,6 +218,7 @@ export function checkCaptcha(id: string, answer: string, honeypot: string, start
 export async function registerUser(opts: {
   email: string;
   password: string;
+  passwordConfirm?: string;
   captchaId: string;
   captchaAnswer: string;
   honeypot: string;
@@ -201,19 +228,24 @@ export async function registerUser(opts: {
   if (!emailOk(email)) return { ok: false as const, error: "邮箱格式不对" };
   const pw = passwordIssue(opts.password, email);
   if (pw) return { ok: false as const, error: pw };
+  if (opts.passwordConfirm === undefined || opts.passwordConfirm !== opts.password) {
+    return { ok: false as const, error: "两次密码不一致" };
+  }
   const cap = checkCaptcha(opts.captchaId, opts.captchaAnswer, opts.honeypot, opts.startedAt);
   if (cap) return { ok: false as const, error: cap };
   const data = await readAccounts();
   if (data.users.some((u) => u.email === email)) return { ok: false as const, error: "这个邮箱已经注册过" };
+  const role = userRole(email);
   const user: AuthUser = {
     id: `u_${token(9)}`,
     email,
     passwordHash: await Bun.password.hash(opts.password, { algorithm: "argon2id" }),
+    role,
     createdAt: new Date().toISOString(),
     failedLogins: 0,
     lockedUntil: "",
   };
-  const inherit = data.users.length === 0;
+  const inherit = data.users.length === 0 || role === "admin";
   data.users.push(user);
   const session: Session = {
     id: token(24),
@@ -256,6 +288,7 @@ export async function loginUser(opts: {
   }
   user.failedLogins = 0;
   user.lockedUntil = "";
+  user.role = userRole(user.email, user.role);
   data.sessions = data.sessions.filter((s) => s.userId !== user.id || s.expiresAt > Date.now());
   const session: Session = {
     id: token(24),

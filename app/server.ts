@@ -1028,6 +1028,7 @@ function readAuthBody(body: Record<string, unknown>) {
   return {
     email: String(body.email || ""),
     password: String(body.password || ""),
+    passwordConfirm: String(body.passwordConfirm || ""),
     captchaId: String(body.captchaId || ""),
     captchaAnswer: String(body.captchaAnswer || ""),
     honeypot: String(body.website || body.company_url || ""),
@@ -1043,7 +1044,18 @@ async function handleAuth(req: Request, url: URL, ip: string) {
   }
   if (path === "/api/auth/me" && req.method === "GET") {
     const session = await readSession(req);
-    return json({ ok: Boolean(session), user: session?.user || null });
+    if (!session) return json({ ok: false, user: null });
+    let name = "";
+    try {
+      const file = workspacePath(session.user.id);
+      if (await Bun.file(file).exists()) {
+        const store = JSON.parse(await Bun.file(file).text()) as { settings?: { operatorName?: string } };
+        name = String(store.settings?.operatorName || "").trim();
+      }
+    } catch {
+      name = "";
+    }
+    return json({ ok: true, user: { ...session.user, name } });
   }
   if (path === "/api/auth/register" && req.method === "POST") {
     const result = await registerUser(readAuthBody((await req.json().catch(() => ({}))) as Record<string, unknown>));
@@ -1105,6 +1117,8 @@ async function dispatch(req: Request, url: URL) {
 Allow: /about.html
 Allow: /llms.txt
 Allow: /og.jpg
+Allow: /desk.jpg
+Allow: /notes.jpg
 Allow: /styles.css
 Allow: /sitemap.xml
 Disallow: /
