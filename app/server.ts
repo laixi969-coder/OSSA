@@ -229,8 +229,16 @@ function json(data: unknown, status = 200) {
   return Response.json(data, { status });
 }
 
-function decodeXml(s: string) {
+function stripEmoji(s: string) {
   return s
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function decodeXml(s: string) {
+  return stripEmoji(
+    s
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(/&#(\d+);/g, (_, n) => {
       const code = Number(n);
@@ -255,7 +263,8 @@ function decodeXml(s: string) {
     .replace(/&apos;/g, "'")
     .replace(/&nbsp;/g, " ")
     .replace(/&#160;/g, " ")
-    .trim();
+    .trim(),
+  );
 }
 
 function cleanRssTitle(title: string) {
@@ -424,8 +433,9 @@ function whyDo(kind: string) {
   const map: Record<string, { why: string; do: string }> = {
     weibo: { why: "今天很多人在搜，适合做态度或解释", do: "跟热点" },
     zhihu: { why: "问题本身就是选题", do: "答疑向" },
-    douyin: { why: "短视频正在推这个，适合做口播或切片", do: "跟热点" },
-    bili: { why: "B站在传，适合做稍长一点的讲解", do: "做讲解" },
+    douyin: { why: "短视频正在推这个，适合做口播或切片", do: "抖音" },
+    bili: { why: "B站在传，适合做稍长一点的讲解", do: "B站" },
+    rednote: { why: "小红书在传，适合做图文或短视频", do: "小红书" },
     toutiao: { why: "资讯流在推，适合做跟进", do: "跟进解读" },
     baidu: { why: "搜索意图明确，适合做攻略或辟谣", do: "答疑向" },
     quark: { why: "夸克热榜上的大众议题，适合做解释", do: "跟热点" },
@@ -467,7 +477,7 @@ function markOrigin(items: SignalItem[], origin: InspirationOrigin): SignalItem[
 }
 
 function skipAsHomeHot(title: string) {
-  return /遇难|死亡|地震|泥石流|空难|溃坝|爆炸|伤亡|受灾|救援|灾区|山洪|洪水|杀害|杀人|遇害|身亡|事故|触电|人祸|招聘会/.test(title);
+  return /遇难|死亡|地震|泥石流|空难|溃坝|爆炸|伤亡|受灾|救援|灾区|山洪|洪水|杀害|杀人|遇害|身亡|事故|触电|人祸|招聘会|遗体|火化/.test(title);
 }
 
 function themeGroups(themes: Theme[]) {
@@ -559,7 +569,7 @@ function mixInspirations(
       why: oneLiner({ ...item, origin }),
     });
   };
-  pickEvergreen(3, batch).forEach((item) => take(item, "evergreen"));
+  pickEvergreen(2, batch).forEach((item) => take(item, "evergreen"));
   let round = 0;
   while (out.length < want && round < 8) {
     for (const pool of pools) {
@@ -746,7 +756,23 @@ const MIME: Record<string, string> = {
   json: "application/json; charset=utf-8",
   svg: "image/svg+xml",
   ico: "image/x-icon",
+  txt: "text/plain; charset=utf-8",
+  xml: "application/xml; charset=utf-8",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
 };
+
+function publicOrigin(req: Request) {
+  const env = (process.env.OSSA_PUBLIC_ORIGIN || "").replace(/\/$/, "");
+  if (env) return env;
+  try {
+    return new URL(req.url).origin;
+  } catch {
+    return "http://127.0.0.1:4319";
+  }
+}
 
 async function staticFile(pathname: string) {
   const rel = pathname === "/" ? "/index.html" : pathname;
@@ -766,6 +792,53 @@ Bun.serve({
     const path = url.pathname;
 
     try {
+      if (path === "/robots.txt") {
+        const origin = publicOrigin(req);
+        const body = `User-agent: *
+Allow: /about.html
+Allow: /llms.txt
+Allow: /og.jpg
+Allow: /styles.css
+Allow: /sitemap.xml
+Disallow: /api/
+Disallow: /data/
+
+User-agent: GPTBot
+Allow: /about.html
+Allow: /llms.txt
+
+User-agent: ChatGPT-User
+Allow: /about.html
+Allow: /llms.txt
+
+User-agent: Google-Extended
+Allow: /about.html
+Allow: /llms.txt
+
+User-agent: PerplexityBot
+Allow: /about.html
+Allow: /llms.txt
+
+User-agent: ClaudeBot
+Allow: /about.html
+Allow: /llms.txt
+
+Sitemap: ${origin}/sitemap.xml
+`;
+        return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+
+      if (path === "/sitemap.xml") {
+        const origin = publicOrigin(req);
+        const body = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>${origin}/about.html</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>${origin}/llms.txt</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
+</urlset>
+`;
+        return new Response(body, { headers: { "Content-Type": "application/xml; charset=utf-8" } });
+      }
+
       if (path === "/api/state" && req.method === "GET") {
         const store = await readStore();
         return json({
@@ -820,7 +893,7 @@ Bun.serve({
 
       if (path === "/api/hot") {
         const store = await readStore();
-        const platform = url.searchParams.get("platform") || "weibo";
+        const platform = url.searchParams.get("platform") || "douyin";
         const route: Record<string, string> = {
           weibo: "/v2/weibo",
           zhihu: "/v2/zhihu",
@@ -927,28 +1000,50 @@ Bun.serve({
       if (path === "/api/home") {
         const store = await readStore();
         const batch = Math.max(0, Number(url.searchParams.get("batch") || 0) || 0);
-        const [weiboRaw, aihot, rss] = await Promise.all([
+        const [douyinRaw, biliRaw, rednoteRaw, weiboRaw, aihot, rss] = await Promise.all([
+          sixty(store, "/v2/douyin"),
+          sixty(store, "/v2/bili"),
+          sixty(store, "/v2/rednote"),
           sixty(store, "/v2/weibo"),
           aihotItems(),
           rssItems(store, "marketing"),
         ]);
-        let weibo = { ok: false, error: "", items: [] as SignalItem[] };
-        if (weiboRaw.ok) {
+        const parseSixty = (raw: { ok: boolean; body: string }, platform: string) => {
+          if (!raw.ok) return [] as SignalItem[];
           try {
-            weibo = mapHot("weibo", JSON.parse(weiboRaw.body));
+            return mapHot(platform, JSON.parse(raw.body)).items;
           } catch {
-            weibo = { ok: false, error: "热榜返回异常", items: [] };
+            return [] as SignalItem[];
           }
-        } else {
-          weibo = { ok: false, error: "本机 60s 还没开，默认地址 http://127.0.0.1:4399", items: [] };
-        }
+        };
+        const weiboOk = rednoteRaw.ok || douyinRaw.ok || biliRaw.ok || weiboRaw.ok;
         const wantRaw = Number(store.settings.mustReadCount || 10);
         const want = wantRaw >= 8 && wantRaw <= 10 ? wantRaw : 10;
         const groups = themeGroups(store.themes || []);
-        let hotPool = weibo.items.filter((it) => !skipAsHomeHot(it.title));
-        if (groups.length) {
-          hotPool = hotPool.filter((it) => matchTheme(`${it.title} ${it.summary || ""}`, groups));
+        const cleanHot = (items: SignalItem[]) => {
+          let next = items.filter((it) => !skipAsHomeHot(it.title));
+          if (groups.length) {
+            next = next.filter((it) => matchTheme(`${it.title} ${it.summary || ""}`, groups));
+          }
+          return next;
+        };
+        const primaryHot = [
+          cleanHot(parseSixty(rednoteRaw, "rednote")),
+          cleanHot(parseSixty(douyinRaw, "douyin")),
+          cleanHot(parseSixty(biliRaw, "bili")),
+        ];
+        const secondaryHot = cleanHot(parseSixty(weiboRaw, "weibo"));
+        const hotPool: SignalItem[] = [];
+        primaryHot.forEach((bucket) => {
+          if (bucket[0]) hotPool.push(bucket[0]);
+        });
+        if (secondaryHot[0]) hotPool.push(secondaryHot[0]);
+        for (let i = 1; i < 12; i++) {
+          for (const bucket of primaryHot) {
+            if (bucket[i]) hotPool.push(bucket[i]);
+          }
         }
+        secondaryHot.slice(1).forEach((it) => hotPool.push(it));
         const cases = withThemeMatch(markOrigin(rss.items, "case"), groups).sort(
           (a, b) => Number(Boolean(b.matchedTheme)) - Number(Boolean(a.matchedTheme)),
         );
@@ -956,9 +1051,9 @@ Bun.serve({
         const hots = withThemeMatch(markOrigin(hotPool, "hot"), groups);
         const inspirations = mixInspirations(
           [
-            { origin: "case", items: cases, cap: 4 },
+            { origin: "hot", items: hots, cap: 4 },
+            { origin: "case", items: cases, cap: 2 },
             { origin: "news", items: news, cap: 2 },
-            { origin: "hot", items: hots, cap: 2 },
           ],
           want,
           batch,
@@ -1002,7 +1097,7 @@ Bun.serve({
           pins: store.pins.slice(0, 5),
           themes: (store.themes || []).filter((t) => t.status !== "paused").slice(0, 8),
           themeFilterOn: groups.length > 0,
-          weiboOk: weibo.ok,
+          weiboOk,
           aihotOk: aihot.ok,
           rssOk: rss.ok,
           operatorName: store.settings.operatorName,

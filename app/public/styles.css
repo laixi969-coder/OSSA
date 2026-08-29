@@ -332,7 +332,7 @@ button { cursor: pointer; }
 
 .hot-board {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 .col {
@@ -600,3 +600,46 @@ button { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+.about-page { max-width: 760px; margin: 0 auto; padding: 28px 24px 72px; }
+.about-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 36px;
+}
+.about-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--ink-1);
+}
+.about-brand small { display: block; color: var(--ink-3); font-size: 12px; }
+.about-main h1 {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 5vw, 42px);
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  margin-bottom: 16px;
+}
+.about-main .lede {
+  font-size: 17px;
+  color: var(--ink-2);
+  max-width: 40em;
+  margin-bottom: 36px;
+  text-wrap: pretty;
+}
+.about-main section { margin: 32px 0; }
+.about-main h2 { font-size: 18px; margin-bottom: 12px; letter-spacing: -0.02em; }
+.about-main h3 { font-size: 15px; margin: 16px 0 6px; }
+.about-main p, .about-main li { color: var(--ink-2); }
+.about-main ul, .about-steps { padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.about-dl { display: grid; gap: 12px; }
+.about-dl dt { font-weight: 650; }
+.about-dl dd { color: var(--ink-2); }
+.about-note { color: var(--ink-3); font-size: 13px; margin: 28px 0 12px; }
+.rail-foot a { color: var(--rail-ink-active); text-decoration: none; }
+.rail-foot a:hover { text-decoration: underline; }

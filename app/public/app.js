@@ -1,6 +1,16 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const main = $("#main");
 const toastEl = $("#toast");
+const PAGE_TITLE = "OSSA 工作台 · 先选项，再拍写";
+
+function lockTitle() {
+  if (document.title !== PAGE_TITLE) document.title = PAGE_TITLE;
+}
+lockTitle();
+const titleEl = document.querySelector("title");
+if (titleEl) {
+  new MutationObserver(lockTitle).observe(titleEl, { childList: true, characterData: true, subtree: true });
+}
 
 function toast(text) {
   toastEl.textContent = text;
@@ -18,8 +28,15 @@ async function api(path, opts) {
   return data;
 }
 
-function esc(s) {
+function stripEmoji(s) {
   return String(s || "")
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function esc(s) {
+  return stripEmoji(s)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -97,15 +114,20 @@ async function toTopic(item) {
 }
 
 const PLATFORMS = [
-  { id: "weibo", name: "微博" },
-  { id: "zhihu", name: "知乎" },
+  { id: "rednote", name: "小红书" },
   { id: "douyin", name: "抖音" },
   { id: "bili", name: "B站" },
+  { id: "weibo", name: "微博" },
+  { id: "zhihu", name: "知乎" },
   { id: "toutiao", name: "头条" },
   { id: "baidu", name: "百度" },
   { id: "quark", name: "夸克" },
   { id: "hacker-news", name: "HN" },
+];
+const STAGE_PLATFORMS = [
   { id: "rednote", name: "小红书" },
+  { id: "douyin", name: "抖音" },
+  { id: "bili", name: "B站" },
 ];
 
 function actionsHtml(item) {
@@ -247,14 +269,14 @@ async function renderTab(tab) {
 
 async function renderPlatform(pane) {
   pane.innerHTML = `<div class="hot-board">
-    <section class="col">
-      <header><strong>左列</strong><select id="left">${PLATFORMS.map((p) => `<option value="${p.id}" ${p.id === "weibo" ? "selected" : ""}>${p.name}</option>`).join("")}</select></header>
-      <div id="leftList" class="rank"></div>
-    </section>
-    <section class="col">
-      <header><strong>右列</strong><select id="right">${PLATFORMS.map((p) => `<option value="${p.id}" ${p.id === "zhihu" ? "selected" : ""}>${p.name}</option>`).join("")}</select></header>
-      <div id="rightList" class="rank"></div>
-    </section>
+    ${STAGE_PLATFORMS.map(
+      (p, i) => `<section class="col">
+      <header><strong>${p.name}</strong><select id="col${i}">${PLATFORMS.map(
+        (opt) => `<option value="${opt.id}" ${opt.id === p.id ? "selected" : ""}>${opt.name}</option>`,
+      ).join("")}</select></header>
+      <div id="list${i}" class="rank"></div>
+    </section>`,
+    ).join("")}
   </div>`;
 
   async function fill(sel, target) {
@@ -285,9 +307,10 @@ async function renderPlatform(pane) {
       btn.addEventListener("click", () => plantTheme(items[Number(btn.dataset.plantI)]));
     });
   }
-  $("#left").addEventListener("change", () => fill("#left", "#leftList"));
-  $("#right").addEventListener("change", () => fill("#right", "#rightList"));
-  await Promise.all([fill("#left", "#leftList"), fill("#right", "#rightList")]);
+  STAGE_PLATFORMS.forEach((_, i) => {
+    $(`#col${i}`).addEventListener("change", () => fill(`#col${i}`, `#list${i}`));
+  });
+  await Promise.all(STAGE_PLATFORMS.map((_, i) => fill(`#col${i}`, `#list${i}`)));
 }
 
 async function renderAi(pane) {
