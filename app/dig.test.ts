@@ -9,6 +9,7 @@ import {
   mergeDig,
   parseRssItems,
   queryKey,
+  repairDigText,
 } from "./dig";
 
 const rss = `<?xml version="1.0"?><rss><channel>
@@ -132,6 +133,17 @@ describe("merge over time", () => {
     expect(cards).toHaveLength(0);
   });
 
+  test("热榜词条贯通到卡片并按 post 上墙", () => {
+    const cards = hitsToCards(
+      [{ title: "孙宇晨 景甜", url: "https://s.weibo.com/weibo?q=x", sourceName: "微博热搜", summary: "热搜第 3 位", hotEntry: true }],
+      "孙宇晨 景甜",
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0].kind).toBe("post");
+    expect(cards[0].hotEntry).toBe(true);
+    expect(cards[0].publishedAt).toBe("");
+  });
+
   test("同一 url 生成稳定 id", () => {
     expect(cardIdFromUrl("https://Ex.com/a?utm_source=x")).toBe(cardIdFromUrl("https://ex.com/a"));
   });
@@ -146,5 +158,67 @@ describe("merge over time", () => {
     );
     const links = inferLinks(cards);
     expect(links.some((l) => l.relation === "quote")).toBe(true);
+  });
+});
+
+describe("repair legacy text", () => {
+  const base = {
+    id: "ev:x",
+    url: "https://n.example/1",
+    sourceName: "观察者",
+    publishedAt: "2026-08-27T00:00:00.000Z",
+    keywords: [],
+    imageUrl: "",
+    stance: "报道" as const,
+    x: 0,
+    y: 0,
+    firstSeenAt: "",
+    lastSeenAt: "",
+  };
+  const card = (over: Partial<typeof base> & { kind: string; title: string; summary: string }) =>
+    ({ ...base, ...over }) as unknown as Parameters<typeof repairDigText>[0]["cards"][number];
+
+  test("清掉标题来源尾巴和摘要里的 nbsp 复读", () => {
+    const dig = {
+      cards: [
+        card({
+          kind: "news",
+          title: "热搜第一！孙宇晨起诉要求退还3000万彩礼，景甜方回应-观察者网",
+          summary: "热搜第一！孙宇晨起诉要求退还3000万彩礼，景甜方回应-观察者网 &nbsp;&nbsp; 观察者",
+        }),
+      ],
+    } as unknown as Parameters<typeof repairDigText>[0];
+    expect(repairDigText(dig)).toBe(true);
+    expect(dig.cards[0].title).toBe("热搜第一！孙宇晨起诉要求退还3000万彩礼，景甜方回应");
+    expect(dig.cards[0].summary).toBe("");
+  });
+
+  test("多故事块摘要只留第一段，真摘要在解码后保留", () => {
+    const dig = {
+      cards: [
+        card({
+          kind: "news",
+          title: "孙宇晨发布长文回应",
+          summary: "孙宇晨发布长文回应 &nbsp;&nbsp; 中华网 孙宇晨承认部分内容不实 &nbsp;&nbsp; 新浪新闻",
+        }),
+        card({
+          kind: "news",
+          title: "事件仍在发酵",
+          summary: "多方仍在等待进一步消息 &nbsp;&nbsp; 联合早报",
+        }),
+      ],
+    } as unknown as Parameters<typeof repairDigText>[0];
+    repairDigText(dig);
+    expect(dig.cards[0].summary).toBe("");
+    expect(dig.cards[1].summary).toBe("多方仍在等待进一步消息");
+  });
+
+  test("干净卡与便签不动，没改就返回 false", () => {
+    const clean = card({ kind: "news", title: "正常标题", summary: "一句正常摘要" });
+    const note = card({ kind: "note", title: "我觉得 这事没完", summary: "" });
+    const dig = { cards: [clean, note] } as unknown as Parameters<typeof repairDigText>[0];
+    expect(repairDigText(dig)).toBe(false);
+    expect(clean.summary).toBe("一句正常摘要");
+    expect(note.title).toBe("我觉得 这事没完");
   });
 });

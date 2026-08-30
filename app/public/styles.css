@@ -63,6 +63,7 @@ body::before {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='80' height='80' filter='url(%23n)' opacity='.55'/></svg>");
 }
 .app, .gate { position: relative; z-index: 2; }
+::selection { background: color-mix(in oklab, var(--color-accent) 24%, transparent); }
 button, input, textarea, select { font: inherit; color: inherit; }
 a { color: inherit; }
 button { cursor: pointer; }
@@ -827,8 +828,11 @@ select[aria-invalid="true"] {
 .gate .btn[type="submit"] { width: 100%; justify-content: center; min-height: 44px; }
 
 @media (max-width: 980px) {
-  .app { grid-template-columns: 1fr; }
+  /* minmax(0,1fr)：1fr 自带的 auto 最小尺寸会被横条导航的 min-content 撑宽，
+     整个页面在手机上溢出视口。轨道必须允许收到 0。 */
+  .app { grid-template-columns: minmax(0, 1fr); }
   .rail {
+    min-width: 0;
     position: sticky;
     top: 0;
     z-index: var(--z-nav);
@@ -1452,7 +1456,20 @@ select[aria-invalid="true"] {
 .ev-card.kind-derivative h3 { -webkit-line-clamp: 2; line-clamp: 2; }
 .ev-card.kind-derivative p { -webkit-line-clamp: 2; line-clamp: 2; }
 .ev-k, .ev-src { font-size: 11px; color: var(--color-ink-3); font-family: var(--font-outlier); }
-.ev-card .actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+/* 卡上动作平时收起来，悬停 / 键盘进入 / 选中才显现——38 张卡×2 个按钮挂在明面上太吵。
+   visibility 而非 display：占位不变，卡高才守得住 LANE_GEO 的数。 */
+.ev-card .actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-micro) linear, visibility var(--dur-micro) linear;
+}
+.ev-card:hover .actions,
+.ev-card:focus-within .actions,
+.ev-card.is-on .actions { opacity: 1; visibility: visible; }
 .ev-card .actions .btn { min-height: 34px; padding: 5px 10px; font-size: 12px; }
 /* 状态 */
 .ev-card.is-new { outline: 2px dashed var(--color-accent-line); outline-offset: 3px; }
@@ -1481,6 +1498,28 @@ select[aria-invalid="true"] {
   rotate: -7deg;
   opacity: 0.75;
   pointer-events: none;
+}
+/* 转述章：墨色，不跟「第一现场」的靛蓝抢 */
+.ev-card .stamp.relay { color: var(--color-ink-2); }
+
+/* 转述的原帖：立场行转靛蓝点出发声者，原话走引文体。占位不变，卡高不动。 */
+.ev-card.is-relay .ev-src { color: var(--color-accent); }
+.ev-card.is-relay .ev-relay { font-weight: 600; }
+.ev-card.kind-news .ev-quote {
+  position: relative;
+  padding-left: 13px;
+  color: var(--color-ink);
+}
+.ev-card.kind-news .ev-quote::before {
+  content: "\201C";
+  position: absolute;
+  left: 0;
+  top: -3px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  line-height: 1;
+  color: var(--color-accent);
+  opacity: 0.65;
 }
 
 /* ── 材质 1 · 新闻剪报 ─────────────────────────────────────────── */
@@ -1875,7 +1914,7 @@ select[aria-invalid="true"] {
 @media (max-width: 900px) {
   .dig-chrome { padding: var(--space-xs) var(--space-sm) var(--space-2xs); }
   .dig-bar form { flex: 1 0 100%; }
-  .dig-tools { width: 100%; }
+  .dig-tools { width: 100%; flex-wrap: wrap; }
   .dig-tools .btn.ghost { flex: 1 1 auto; }
   .dig-lane-rail { display: none; }
   .dig-dock {
@@ -1891,7 +1930,8 @@ select[aria-invalid="true"] {
     box-shadow: var(--shadow-lg);
     z-index: 22;
   }
-  .dig-legend { max-height: 84px; overflow-y: auto; }
+  .dig-legend { max-height: 84px; overflow-y: auto; scrollbar-width: none; }
+  .dig-legend::-webkit-scrollbar { display: none; }
 }
 .dig-gap b {
   display: block;

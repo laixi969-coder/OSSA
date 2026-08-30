@@ -1324,6 +1324,24 @@ const metrics = (kind) => CARD_METRICS[kind] || CARD_METRICS.news;
 const evTime = (c) => Date.parse(c.publishedAt) || Date.parse(c.firstSeenAt) || 0;
 const evDate = (c) => (c.publishedAt ? String(c.publishedAt).slice(0, 10) : "");
 
+/** 新闻转述的当事人发声——传播链里真正的发酵节点，脸上要看得出来。 */
+const isRelay = (c) => c.kind === "news" && (c.stance === "当事人回应" || c.stance === "单方陈述");
+/** 从标题里认出发声的人：「景甜方回应」「孙宇晨承认…长文」→ 景甜方 / 孙宇晨。认不出就空。 */
+const evSpeaker = (c) => {
+  const m = String(c.title || "").match(
+    /([\u4e00-\u9fff·]{2,6}(?:方|工作室)?)(?:今日|凌晨|深夜|昨晚|上午|下午|刚刚|随后)?(发布长文|发文回应|回应|声明|道歉|承认|控诉|自述|喊话|发文|发帖|长文)/,
+  );
+  const name = m?.[1] || "";
+  if (!name || /^(媒体|网友|记者|知情人士|报道|消息|传闻)$/.test(name)) return "";
+  return name;
+};
+/** 标题或摘要里带引号的原话（4–60 字），摘不到就空，不编。 */
+const evQuote = (c) => {
+  const m = String(`${c.title} ${c.summary || ""}`).match(/[“「]([^”」]{4,60})[”」]/);
+  return m ? m[1] : "";
+};
+const evKindLabel = (c) => (c.hotEntry && c.kind === "post" ? "热搜词条" : DIG_KIND[c.kind] || c.kind);
+
 async function renderDig() {
   main.classList.add("wide");
   const q0 = route().query.get("q") || "";
@@ -1365,6 +1383,7 @@ async function renderDig() {
             <li>一行之内横着是时间，左早右晚；行底刻度是这一行的真实日期</li>
             <li>竖着分五格：新闻、帖子、图、衍生品、便签</li>
             <li>绳是关系，箭头指向下游：报道、引用、转发、二创、商业</li>
+            <li>社交原帖大多抓不到：新闻转述的当事人发声盖「转述」章、能摘到就引原话；热榜词条只代表「此刻在榜」，都不冒充原帖</li>
             <li>点一张卡，右边出这条链；拖动能挪位置</li>
             <li>点「贴便签」再点墙上，就把你的判断贴上去了</li>
           </ol>
@@ -1690,22 +1709,31 @@ async function renderDig() {
     const open = card.url ? `<a class="btn ghost" href="${esc(card.url)}" target="_blank" rel="noopener">原文</a>` : "";
     const acts = `<div class="actions">${open}<button class="btn" type="button" data-topic>选这个</button></div>`;
     if (card.kind === "news") {
+      const relay = isRelay(card);
+      const quote = relay ? evQuote(card) : "";
+      const speaker = relay ? evSpeaker(card) : "";
+      const stanceLine = relay
+        ? `<b class="ev-relay">${esc(speaker ? `${speaker}${card.stance === "当事人回应" ? "回应" : "自述"}` : card.stance)}</b>${card.isNew ? " · 新到" : ""}`
+        : `${esc(card.stance || "")}${card.isNew ? " · 新到" : ""}`;
       return `<i class="pin" aria-hidden="true"></i>
         <div class="ev-k"><span>${esc(src || "来源未标")}</span><span>${esc(date)}</span></div>
         <h3>${esc(card.title)}</h3>
-        <p>${esc(sum)}</p>
-        <div class="ev-src">${esc(card.stance || "")}${card.isNew ? " · 新到" : ""}</div>
-        ${isOrigin ? '<span class="stamp">第一现场</span>' : ""}
+        ${quote ? `<p class="ev-quote">${esc(quote)}</p>` : sum ? `<p>${esc(sum)}</p>` : ""}
+        <div class="ev-src">${stanceLine}</div>
+        ${isOrigin ? '<span class="stamp">第一现场</span>' : relay ? '<span class="stamp relay">转述</span>' : ""}
         ${acts}`;
     }
     if (card.kind === "post") {
+      const hot = Boolean(card.hotEntry);
       return `<i class="pin" aria-hidden="true"></i>
         <div class="ev-head">
           <span class="ev-ava" aria-hidden="true">${esc((src || "?").slice(0, 1))}</span>
-          <span class="ev-who"><b>${esc(src || "未知平台")}</b><span class="ev-k">${esc(card.stance || "帖子")} · ${esc(date)}</span></span>
+          <span class="ev-who"><b>${esc(src || "未知平台")}</b><span class="ev-k">${
+            hot ? `热搜词条${date ? " · " + esc(date) : " · 此刻"}` : `${esc(card.stance || "帖子")} · ${esc(date)}`
+          }</span></span>
         </div>
         <h3>${esc(card.title)}</h3>
-        <p>${esc(sum || card.title)}</p>
+        ${sum ? `<p>${esc(sum)}</p>` : ""}
         ${acts}`;
     }
     if (card.kind === "meme" || card.kind === "image") {
@@ -1722,7 +1750,7 @@ async function renderDig() {
       return `<i class="pin" aria-hidden="true"></i>
         <div class="ev-k">衍生品</div>
         <h3>${esc(card.title)}</h3>
-        <p>${esc(sum.slice(0, 72))}</p>
+        ${sum ? `<p>${esc(sum.slice(0, 72))}</p>` : ""}
         <div class="ev-src">${esc(src)}${date ? " · " + esc(date) : ""}</div>
         ${acts}`;
     }
@@ -1742,8 +1770,8 @@ async function renderDig() {
       const dim = Boolean(active) && !active.has(card.id);
       const deg = degreeOf(card.id);
       el.className = `ev-card kind-${card.kind}${card.isNew ? " is-new" : ""}${card.stale ? " is-stale" : ""}${
-        isOn ? " is-on" : ""
-      }${dim ? " is-dim" : ""}${active && !isOn && !dim ? " is-linked" : ""}`;
+        isRelay(card) ? " is-relay" : ""
+      }${isOn ? " is-on" : ""}${dim ? " is-dim" : ""}${active && !isOn && !dim ? " is-linked" : ""}`;
       el.style.left = `${card.x}px`;
       el.style.top = `${card.y}px`;
       el.dataset.id = card.id;
@@ -1751,7 +1779,9 @@ async function renderDig() {
       el.setAttribute("role", "button");
       el.setAttribute(
         "aria-label",
-        `${DIG_KIND[card.kind] || card.kind}：${card.title}。${card.sourceName || ""} ${evDate(card)}。连着 ${deg} 条线绳`,
+        `${evKindLabel(card)}${isRelay(card) ? "（经新闻转述）" : ""}：${card.title}。${card.sourceName || ""} ${
+          evDate(card) || (card.hotEntry ? "此刻在榜" : "日期未标")
+        }。连着 ${deg} 条线绳`,
       );
       el.innerHTML = cardHtml(card);
       if (deg) el.insertAdjacentHTML("afterbegin", `<span class="ev-deg">${deg}</span>`);
@@ -1816,11 +1846,13 @@ async function renderDig() {
       : "";
     box.hidden = false;
     box.innerHTML = `<div class="dock-top">
-        <span class="dock-kind">${esc(DIG_KIND[card.kind] || card.kind)}${card.stance ? " · " + esc(card.stance) : ""}</span>
+        <span class="dock-kind">${esc(evKindLabel(card))}${card.stance ? " · " + esc(card.stance) : ""}${
+          isRelay(card) ? " · 经媒体转述" : ""
+        }</span>
         <button class="dock-x" type="button" id="dockClose" aria-label="关掉这条链">✕</button>
       </div>
       <h2 class="dock-title">${esc(card.title)}</h2>
-      <p class="dock-meta">${esc(card.sourceName || "来源未标")} · ${esc(evDate(card) || "日期未标")}${
+      <p class="dock-meta">${esc(card.sourceName || "来源未标")} · ${esc(evDate(card) || (card.hotEntry ? "此刻在榜" : "日期未标"))}${
         card.stale ? " · 这一轮没再搜到" : ""
       }</p>
       ${card.summary ? `<p class="dock-meta">${esc(card.summary)}</p>` : ""}
@@ -1835,7 +1867,7 @@ async function renderDig() {
             <span class="n">${i + 1}</span>
             <button type="button" data-goto="${esc(c.id)}">
               <span class="t">${esc(c.title)}</span>
-              <span class="m">${esc(evDate(c))} · ${esc(c.sourceName || DIG_KIND[c.kind] || "")}</span>
+              <span class="m">${esc(evDate(c) || (c.hotEntry ? "此刻" : "—"))} · ${esc(c.sourceName || evKindLabel(c))}</span>
               ${rel || (firstStep ? '<span class="rel">第一现场</span>' : '<span class="rel">这一段里最早</span>')}
             </button>
           </li>`;
@@ -2076,7 +2108,7 @@ async function renderDig() {
               ? "这一场最先出现的一条"
               : "还没连上别的卡";
           return `<li><button type="button" data-goto="${esc(c.id)}">
-            <span class="r1"><span class="rk">${esc(DIG_KIND[c.kind] || c.kind)}</span><span>${esc(evDate(c))}</span><span>${esc(
+            <span class="r1"><span class="rk">${esc(evKindLabel(c))}</span><span>${esc(evDate(c) || (c.hotEntry ? "此刻" : "—"))}</span><span>${esc(
               c.sourceName || "",
             )}</span></span>
             <span class="r2">${esc(c.title)}</span>

@@ -19,6 +19,8 @@ export type EvidenceCard = {
   lastSeenAt: string;
   isNew?: boolean;
   stale?: boolean;
+  /** 热榜词条，不是原帖：来自平台热搜快照，没有作者和发帖时间，页面按「此刻在榜」呈现。 */
+  hotEntry?: boolean;
   /** 用户手拖过位置。整墙重排时钉住不动，其余卡绕开它。 */
   pinned?: boolean;
 };
@@ -58,6 +60,8 @@ export type RawHit = {
   sourceName?: string;
   summary?: string;
   imageUrl?: string;
+  /** 热榜词条命中（社交热榜快照），非原帖。 */
+  hotEntry?: boolean;
 };
 
 // 卡片宽度按种类；泳道高度按道（meme 和 image 同道）。
@@ -173,6 +177,34 @@ export function splitTitleSource(raw: string): { title: string; source: string }
   return { title: flatten(stripSourceTail(decoded)), source: titleSource(decoded) };
 }
 
+/**
+ * 历史坏数据自愈：标题清洗上线之前存下来的卡，标题带「-观察者网」尾巴，
+ * 摘要则是「标题 &nbsp;&nbsp; 来源」这种 Google 多故事块原样入库，
+ * 前端 esc() 之后页面上就是一堆「nbsp;」。在这里一次清干净，返回是否改过。
+ * 便签是用户手打的话，不动。
+ */
+export function repairDigText(dig: Dig): boolean {
+  let dirty = false;
+  for (const card of dig?.cards || []) {
+    if (card.kind === "note") continue;
+    const title = splitTitleSource(card.title).title;
+    if (title && title !== card.title) {
+      card.title = title;
+      dirty = true;
+    }
+    const raw = String(card.summary || "");
+    // 只有带着实体残留或双空格连接的历史摘要才动刀，干净的别碰。
+    if (!raw || !(/&(?:nbsp|#160);|\u00A0/.test(raw) || /\s{2,}/.test(raw))) continue;
+    const seg = splitTitleSource(raw.split(/(?:&(?:nbsp|#160);|\u00A0)+/)[0] || "").title;
+    const next = seg && seg !== title ? seg : "";
+    if (next !== card.summary) {
+      card.summary = next;
+      dirty = true;
+    }
+  }
+  return dirty;
+}
+
 export function parseRssItems(xml: string): RawHit[] {
   const blocks = String(xml || "").match(/<item\b[\s\S]*?<\/item>/gi) || [];
   const out: RawHit[] = [];
@@ -245,7 +277,8 @@ export function classifyKind(hit: RawHit): CardKind {
   const hay = `${hit.title} ${hit.url} ${hit.sourceName || ""}`.toLowerCase();
   if (/表情包|梗图|meme/.test(hay)) return "meme";
   if (/代币|二创|同人|恶搞|鬼畜|meme币|memecoin/.test(hay)) return "derivative";
-  if (/weibo|zhihu|xiaohongshu|douyin|twitter|x\.com|facebook/.test(hay)) return "post";
+  // 热榜词条的搜索/趋势页链接都算社交信号（weibo/zhihu/douyin/bili/toutiao/贴吧）
+  if (/weibo|zhihu|xiaohongshu|douyin|bili|toutiao|tieba|twitter|x\.com|facebook/.test(hay)) return "post";
   if (/\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(hit.url)) return "image";
   return "news";
 }
@@ -301,6 +334,7 @@ export function hitsToCards(hits: RawHit[], query: string, now = new Date().toIS
       firstSeenAt: now,
       lastSeenAt: now,
       isNew: true,
+      hotEntry: hit.hotEntry || undefined,
     });
   }
   return cards;
@@ -623,7 +657,8 @@ export async function collectHits(query: string, extras: RawHit[] = []): Promise
   const gaps: string[] = [];
   const [google, bing] = await Promise.all([searchGoogleNews(query), searchBingNews(query)]);
   if (!google.length) gaps.push("新闻检索有一路没回来");
-  const hits = [...google, ...bing, ...extras];
+  // extras（热榜词条）排在最前：它们本来就稀少，截断 36 张时不能先砍它们。
+  const hits = [...extras, ...google, ...bing];
   const used = new Set<string>();
   const unique: RawHit[] = [];
   for (const hit of hits) {

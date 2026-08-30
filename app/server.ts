@@ -32,7 +32,8 @@ import {
   type TopicIdea,
 } from "./topic";
 import { clampFieldWant, mixFields, skipAsHomeHot, type FieldOrigin } from "./pool";
-import { hitMatchesQuery, layoutCards, queryKey, runDig, wallBounds, type Dig, type RawHit } from "./dig";
+import { hitMatchesQuery, layoutCards, queryKey, repairDigText, runDig, wallBounds, type Dig, type RawHit } from "./dig";
+import { appendSnapshot, HOT_DIR, pruneOldSnapshots, searchArchive, type ArchiveHit } from "./hotsnap";
 
 const ROOT = join(import.meta.dir, "..");
 const PUBLIC = join(import.meta.dir, "public");
@@ -731,16 +732,31 @@ function mapHot(platform: string, raw: unknown) {
   return itemsFromSixty(platform, raw as { code?: number; data?: unknown; message?: string });
 }
 
+/** 热榜词条是「此刻注意力」的证据，不是原帖：来源与摘要都要如实写。 */
+const HOT_SOURCE: Record<string, string> = {
+  weibo: "微博热搜",
+  zhihu: "知乎热榜",
+  douyin: "抖音热榜",
+  bili: "B站热榜",
+  toutiao: "今日头条",
+};
+
+/** 实时榜和快照轮询共用一张平台表。 */
+const HOT_PLATFORMS: Array<{ id: string; path: string }> = [
+  { id: "weibo", path: "/v2/weibo" },
+  { id: "zhihu", path: "/v2/zhihu" },
+  { id: "douyin", path: "/v2/douyin" },
+  { id: "bili", path: "/v2/bili" },
+  { id: "toutiao", path: "/v2/toutiao" },
+];
+
+/** 词条卡摘要：回溯命中写首现日期，别让人误以为是刚刚上榜。 */
+const hotSummary = (a: ArchiveHit) => `热榜第 ${a.bestRank} 位 · ${a.firstSeen.slice(5, 10).replace(/^0/, "")} 上榜`;
+
 async function socialHits(store: Store, query: string): Promise<RawHit[]> {
-  const platforms: Array<{ id: string; path: string }> = [
-    { id: "weibo", path: "/v2/weibo" },
-    { id: "zhihu", path: "/v2/zhihu" },
-    { id: "douyin", path: "/v2/douyin" },
-    { id: "bili", path: "/v2/bili" },
-  ];
-  const rows = await Promise.all(platforms.map((p) => sixty(store, p.path)));
+  const rows = await Promise.all(HOT_PLATFORMS.map((p) => sixty(store, p.path)));
   const hits: RawHit[] = [];
-  platforms.forEach((p, i) => {
+  HOT_PLATFORMS.forEach((p, i) => {
     const raw = rows[i];
     if (!raw.ok) return;
     try {
@@ -750,16 +766,84 @@ async function socialHits(store: Store, query: string): Promise<RawHit[]> {
           title: it.title,
           url: it.url,
           publishedAt: it.publishedAt,
-          sourceName: it.source || p.id,
-          summary: it.summary || "",
+          sourceName: HOT_SOURCE[p.id] || it.source || p.id,
+          summary: it.summary || (it.rank ? `热搜第 ${it.rank} 位` : ""),
           imageUrl: it.cover || "",
+          hotEntry: true,
         });
       }
     } catch {
       /* 这一路热榜挂了就跳过 */
     }
   });
+  // 历史快照：此刻不在榜、但快照存档里出现过的词条，带首现日期回溯上墙。
+  try {
+    const archive = await searchArchive(HOT_DIR, query);
+    const byUrl = new Map(archive.map((a) => [a.url, a]));
+    for (const h of hits) {
+      const a = byUrl.get(h.url);
+      if (!a) continue;
+      // 还在榜的词条补上首现日期（发布时间原本是空），摘要换成带历史的说法
+      if (!h.publishedAt) h.publishedAt = a.firstSeen;
+      h.summary = hotSummary(a);
+    }
+    const liveUrls = new Set(hits.map((h) => h.url));
+    for (const a of archive) {
+      if (liveUrls.has(a.url)) continue;
+      hits.push({
+        title: a.title,
+        url: a.url,
+        publishedAt: a.firstSeen,
+        sourceName: HOT_SOURCE[a.platform] || a.platform,
+        summary: hotSummary(a),
+        imageUrl: "",
+        hotEntry: true,
+      });
+    }
+  } catch {
+    /* 存档读不了就只看此刻榜 */
+  }
   return hits;
+}
+
+/* ── 热榜快照轮询：每 30 分钟整榜落一份，事件地图才回溯得了 ────── */
+const HOT_POLL_MS = 30 * 60 * 1000;
+let hotPolling = false;
+
+async function globalSixtyBase(): Promise<string> {
+  try {
+    const s = JSON.parse(await Bun.file(join(ROOT, "data", "store.json")).text());
+    return String(s?.settings?.sixtyBase || "http://127.0.0.1:4399").replace(/\/$/, "");
+  } catch {
+    return "http://127.0.0.1:4399";
+  }
+}
+
+async function pollHotSnapshot(): Promise<void> {
+  if (hotPolling) return;
+  hotPolling = true;
+  try {
+    const base = await globalSixtyBase();
+    const rows = await Promise.all(HOT_PLATFORMS.map((p) => fetchJson(`${base}${p.path}`, 8000)));
+    for (let i = 0; i < HOT_PLATFORMS.length; i++) {
+      const raw = rows[i];
+      if (!raw.ok) continue;
+      try {
+        const items = mapHot(HOT_PLATFORMS[i].id, JSON.parse(raw.body)).items;
+        await appendSnapshot(
+          HOT_DIR,
+          HOT_PLATFORMS[i].id,
+          items.map((it) => ({ rank: it.rank, title: it.title, url: it.url, hot: it.heat })),
+        );
+      } catch {
+        /* 单路失败不影响其他路 */
+      }
+    }
+  } catch {
+    /* 60s 不在就跳过这轮，下轮再来 */
+  } finally {
+    hotPolling = false;
+  }
 }
 
 async function githubTrending() {
@@ -965,15 +1049,17 @@ async function handleAuth(req: Request, url: URL, ip: string) {
 /**
  * 旧版 layoutCards 排的 dig 存进 store 后会留下乱坐标；GET 时不重排就直接渲染，
  * 用户看到的还是叠的。这里无脑重排 + 重算 bounds，pinned 卡原位不动，其余绕开。
- * 修过一次就稳定（对同一组卡 layoutCards 是确定性的）。
+ * 顺手把标题清洗上线之前的脏文本（&nbsp; 字面量、来源尾巴、标题复读摘要）修掉。
+ * 修过一次就稳定（对同一组卡两次修复都是确定性的）。
  * 返回 true 表示动了 store，需要写回。
  */
 function repairLayoutIfBroken(dig: Dig): boolean {
   const before = JSON.stringify(dig.cards.map((c) => [c.id, c.x, c.y]));
   layoutCards(dig.cards);
   dig.bounds = wallBounds(dig.cards);
+  const textDirty = repairDigText(dig);
   const after = JSON.stringify(dig.cards.map((c) => [c.id, c.x, c.y]));
-  return before !== after;
+  return before !== after || textDirty;
 }
 
 /** 启动时扫一遍所有 workspace 的 dig，把历史坏数据一次性修好。 */
@@ -993,7 +1079,7 @@ async function repairAllWorkspaces() {
       }
       if (dirty) await writeFile(p, JSON.stringify(store, null, 2));
     }
-    if (n) console.log(`[startup] 自愈了 ${n} 个 dig 的版面（历史坐标）`);
+    if (n) console.log(`[startup] 自愈了 ${n} 个 dig 的历史数据（版面坐标 / 标题文本）`);
   } catch {
     // 数据目录可能还没建（首次启动），忽略
   }
@@ -1793,3 +1879,7 @@ Sitemap: ${origin}/sitemap.xml
 
 console.log(`OSSA Media OS  http://127.0.0.1:${PORT}`);
 repairAllWorkspaces();
+// 热榜快照：启动先落一份并清过期，之后每 30 分钟一轮。存档是全实例共享的。
+pruneOldSnapshots(HOT_DIR);
+pollHotSnapshot();
+setInterval(pollHotSnapshot, HOT_POLL_MS);
