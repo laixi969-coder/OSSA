@@ -110,16 +110,16 @@ channels:
   - name: 事件地图
     type: tool
     weight: regular
-    does: 输入任意网络事件，把公开新闻、社交讨论、图片、热梗和衍生品铺成可拖的证据墙；用图钉和线绳标报道、引用、转发、二创、商业关系。同一主题再搜是补新卡、不推倒重来。不是进门首页，不是判决墙。
+    does: 输入任意网络事件，把当事人公开原帖、社交讨论、新闻核验、图片、热梗和衍生品铺成可拖的证据墙；用图钉和线绳标报道、引用、转发、二创、商业关系。同一主题再搜是补新卡、不推倒重来。不是进门首页，不是判决墙。
     pages:
       - level: L1
-        shows: 无限画布，证据地图。顶栏：任意事件输入（占位「孙宇晨 景甜」，可改成任何公开事件）+ 铺开 + 更新。结论条=N 张证据 · 新到 M 张 · 最早/最晚日期 · 上次搜于何时。卡片可拖。种类=新闻简报 / 社交帖子 / 表情包 / 图片 / 便签 / 衍生品。线绳=报道 / 引用 / 转发 / 二创 / 商业。时间从左到右。再搜时旧卡位置保留，新卡补在时间轴右侧。
+        shows: 无限画布，证据地图。顶栏：任意事件输入（占位「孙宇晨 景甜」，可改成任何公开事件）+ 铺开 + 更新。结论条=N 张证据 · 新到 M 张 · 最早/最晚日期 · 上次搜于何时。卡片可拖。种类=新闻简报 / 社交帖子 / 表情包 / 图片 / 便签 / 衍生品；卡片底色和左侧色标只表达种类，蓝=新闻、绿=社交、橙=视觉、紫=衍生、黄=便签。帖子标平台、作者（搜得到时）、互动量（搜得到时）和在传播中的角色。线绳颜色另行表达报道 / 引用 / 转发 / 二创 / 商业关系；有原始引用地址的是已核实关系，仅凭时间和关键词推断的是推测关系。时间从左到右。再搜时旧卡位置保留，新卡补在时间轴右侧。
         filters: [卡片种类, 关系种类]
         actions: [铺开, 更新, 拖卡片, 拉线, 钉便签, 打开原文, 选这个变成活]
       - level: L2
         shows: 单张证据。原文链接、时间、来源、摘要、关键词、图。标明是报道、单方陈述、当事人回应还是二创。诉讼和感情纠纷不下结论。
         actions: [打开原文, 选这个变成活, 种成主题, 钉便签]
-    note: 查询词任意公开事件，不写死某一桩。点铺开才搜。再点更新=同一场补新证据，不抹掉已拖位置和便签。某类源挂了墙上留空并标明。不准用假卡充墙。从选题池点「事件地图」时，输入框带入这场原题。
+    note: 查询词任意公开事件，不写死某一桩。点铺开才把查询词发送给公开网页检索、新闻 RSS 和本机热榜存档；不自动发送用户备注、密钥或工作区内容。再点更新=同一场补新证据，不抹掉已拖位置和便签。结果按证据种类留配额，新闻不得占满整墙；某类源挂了墙上留空并标明。不准用假卡充墙。从选题池点「事件地图」时，输入框带入这场原题。
 
   - name: 进行中的活
     type: record
@@ -229,22 +229,22 @@ entities:
     fields: [id, prompt, answer, created_at]
     written_by: { prompt: user, answer: system, created_at: system }
   - name: Dig
-    fields: [id, query, status, started_at, finished_at, fetched_at, card_count, link_count, new_count, earliest_at, newest_at]
+    fields: [id, query, status, started_at, finished_at, fetched_at, card_count, suppressed_count, link_count, new_count, earliest_at, newest_at]
     written_by:
       { query: user, status: system, started_at: system, finished_at: system, fetched_at: system,
-        card_count: derived, link_count: derived, new_count: derived, earliest_at: derived, newest_at: derived }
+        card_count: derived, suppressed_count: derived, link_count: derived, new_count: derived, earliest_at: derived, newest_at: derived }
     relations: [Dig 1-n EvidenceCard, Dig 1-n EvidenceLink]
     note: 一场事件地图按 query 归一后复用。status=idle/running/done/failed。占位词「孙宇晨 景甜」，可换成任何事件。再搜是迭代：new_count 是这次新到的张数。没搜过不显示 0。
   - name: EvidenceCard
-    fields: [id, dig_id, kind, title, url, source_name, published_at, summary, keywords, image_url, stance, x, y, created_at, first_seen_at, last_seen_at]
+    fields: [id, dig_id, kind, title, url, source_name, platform, author_name, engagement, content_id, discovered_by, event_role, parent_url, published_at, published_at_approx, summary, keywords, image_url, stance, suppressed, x, y, created_at, first_seen_at, last_seen_at]
     written_by:
       { kind: system, title: integration, url: integration, source_name: integration, published_at: integration,
         summary: integration, keywords: derived, image_url: integration, stance: derived,
         x: user, y: user, created_at: system, first_seen_at: system, last_seen_at: system }
     relations: [EvidenceCard n-1 Dig]
-    note: kind=news/post/meme/image/note/derivative。stance=报道/单方陈述/当事人回应/二创。x,y 初次按时间铺，人拖过的更新时保留。first_seen_at / last_seen_at 用来标新到。便签 kind=note。没有 url 的卡不准进墙，便签除外。旧卡这次没搜到也不删，标过期即可。
+    note: kind=news/post/meme/image/note/derivative。stance=报道/单方陈述/当事人回应/二创。x,y 初次按时间铺，人拖过的更新时保留。first_seen_at / last_seen_at 用来标新到。便签 kind=note。没有 url 的卡不准进墙，便签除外。旧卡这次没搜到也不删，标过期即可；旧轮次超出当前种类配额的机器卡 suppressed=true，仍存在 dig 中但默认不铺墙，重新命中后可回到墙上。用户拖过的卡和便签永不收起。
   - name: EvidenceLink
-    fields: [id, dig_id, from_id, to_id, relation, note, created_at]
+    fields: [id, dig_id, from_id, to_id, relation, confidence, note, created_at]
     written_by: { relation: derived, note: user, created_at: system }
     relations: [EvidenceLink n-1 Dig, EvidenceLink n-1 EvidenceCard]
     note: relation=report/quote/repost/remix/business。标不清就先不连，不要为了墙好看硬连。
@@ -279,9 +279,9 @@ depends_on:
     exists_today: false
     until_then: 热榜继续用本机 60s。不把 TrendRadar 整仓搬进 OSSA（GPL-3.0、Docker、推送）。只借「主题词过滤 + 同一热词跨时段出现」的方法，自己在选题池里做。
   - field: 事件地图公开检索
-    source: 公开网页检索（新闻站、社交公开页、图片检索）。不是小红书登录爬虫，不是付费数据商。
+    source: AnySearch 公开网页检索（按 X / 微博 / 知乎 / 抖音 / B站 / 小红书做站内定向查询）+ Google News RSS + Bing News RSS + 本机 60s 热榜快照。不是小红书登录爬虫，不是付费数据商；AnySearch 不可用时如实降级并在墙上写明。
     exists_today: true
-    until_then: 任意公开事件都可查。点铺开才搜，点更新补新卡。搜到的才上墙。某类搜不到就空着。不准用假卡。占位词不是剧本。
+    until_then: 任意公开事件都可查。先按完整查询词找人物对/事件短语，再从新闻标题发现《文章名》等事件别名做第二轮社交定向搜索。点铺开才搜，点更新补新卡。搜到的才上墙；公开索引找不到的小红书等内容留空，不拿新闻补位。不准用假卡。占位词不是剧本。登录态深搜以后只做用户主动开启的本地增强模式。
 
 mvp:
   - 今日选题池（3～5 场 + 临近节点；热搜最多 2；常青只在场不足时开工）

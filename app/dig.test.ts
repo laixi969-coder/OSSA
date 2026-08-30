@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyDisplayBalance,
   cardIdFromUrl,
   classifyKind,
   classifyStance,
+  discoverEventPhrases,
+  hitMatchesQuery,
   hitsToCards,
   layoutCards,
   inferLinks,
   mergeDig,
+  parsePublicSearchResults,
   parseRssItems,
+  publicSearchQueries,
   queryKey,
   repairDigText,
+  selectBalancedHits,
 } from "./dig";
 
 const rss = `<?xml version="1.0"?><rss><channel>
@@ -30,6 +36,80 @@ describe("parse and classify", () => {
     expect(classifyStance({ title: "景甜工作室声明回应", url: "https://a.com" })).toBe("当事人回应");
     expect(classifyStance({ title: "我的女友景甜 6000字长文", url: "https://a.com" })).toBe("单方陈述");
     expect(classifyKind({ title: "相关表情包刷屏", url: "https://weibo.com/x" })).toBe("meme");
+  });
+});
+
+describe("public social search", () => {
+  const publicResult = `## Search Results (3 results, 12ms)
+
+### 1. 孙宇晨与景甜相关纠纷及诉讼进展
+- **URL**: https://weibo.com/2/detail/5336630200370143?utm_source=star
+- 孙宇晨与景甜相关讨论 date: 3 days ago
+
+### 2. 孙宇晨起诉景甜！孙割
+- **URL**: https://www.douyin.com/video/7678710059853601202
+- 孙宇晨起诉景甜 - 吾心心于20260827发布在抖音，已经收获了627.9万个喜欢
+
+### 3. 一篇新闻转述
+- **URL**: https://news.example.com/a
+- 不是社交原帖`;
+
+  test("只收社交详情页，并带平台、内容 id、日期和互动量", () => {
+    const hits = parsePublicSearchResults(publicResult, new Date("2026-08-30T00:00:00.000Z"));
+    expect(hits).toHaveLength(2);
+    expect(hits[0].platform).toBe("weibo");
+    expect(hits[0].contentId).toBe("5336630200370143");
+    expect(hits[0].publishedAtApprox).toBe(true);
+    expect(hits[1].platform).toBe("douyin");
+    expect(hits[1].authorName).toBe("吾心心");
+    expect(hits[1].engagement).toBe(6_279_000);
+    expect(hits[1].publishedAt).toBe("2026-08-27T12:00:00.000Z");
+  });
+
+  test("人物对采用共同命中；公开检索会带站点并补事件短语", () => {
+    expect(hitMatchesQuery("孙宇晨起诉景甜", "孙宇晨 景甜")).toBe(true);
+    expect(hitMatchesQuery("孙宇晨最新消息", "孙宇晨 景甜")).toBe(false);
+    const phrases = discoverEventPhrases([{ title: "孙宇晨发布《我的女友景甜》", url: "https://n.example" }]);
+    expect(phrases).toEqual(["我的女友景甜"]);
+    const queries = publicSearchQueries("孙宇晨 景甜", phrases);
+    expect(queries.some((q) => q === 'site:x.com "我的女友景甜"')).toBe(true);
+    expect(queries.some((q) => q.startsWith("site:douyin.com/video"))).toBe(true);
+  });
+
+  test("配额不让新闻补满整墙", () => {
+    const news = Array.from({ length: 20 }, (_, i) => ({ title: `新闻 ${i}`, url: `https://news.example/${i}` }));
+    const posts = Array.from({ length: 20 }, (_, i) => ({
+      title: `孙宇晨 景甜 帖子 ${i}`,
+      url: `https://weibo.com/2/detail/${i}`,
+      kind: "post" as const,
+      platform: "weibo",
+    }));
+    const derivative = Array.from({ length: 10 }, (_, i) => ({
+      title: `孙宇晨 景甜 二创 ${i}`,
+      url: `https://video.example/${i}`,
+      kind: "derivative" as const,
+    }));
+    const selected = selectBalancedHits([...news, ...posts, ...derivative], "孙宇晨 景甜");
+    expect(selected.filter((h) => classifyKind(h) === "news")).toHaveLength(12);
+    expect(selected.filter((h) => classifyKind(h) === "post")).toHaveLength(16);
+    expect(selected.filter((h) => classifyKind(h) === "derivative")).toHaveLength(8);
+  });
+
+  test("旧新闻不删除，只收起超出配额的机器卡", () => {
+    const cards = hitsToCards(
+      Array.from({ length: 20 }, (_, i) => ({
+        title: `孙宇晨 景甜 新闻 ${i}`,
+        url: `https://news.example/legacy-${i}`,
+        publishedAt: `2026-08-${String(1 + i).padStart(2, "0")}T00:00:00.000Z`,
+      })),
+      "孙宇晨 景甜",
+    );
+    expect(applyDisplayBalance(cards)).toBe(8);
+    expect(cards).toHaveLength(20);
+    expect(cards.filter((c) => !c.suppressed)).toHaveLength(12);
+    cards[0].pinned = true;
+    applyDisplayBalance(cards);
+    expect(cards[0].suppressed).toBe(false);
   });
 });
 
@@ -158,6 +238,24 @@ describe("merge over time", () => {
     );
     const links = inferLinks(cards);
     expect(links.some((l) => l.relation === "quote")).toBe(true);
+    expect(links.every((l) => l.confidence === "inferred")).toBe(true);
+  });
+
+  test("带 parentUrl 的传播关系标成已核实", () => {
+    const cards = hitsToCards(
+      [
+        { title: "孙宇晨发布长文", url: "https://x.com/a/status/1", publishedAt: "2026-08-27T00:00:00.000Z" },
+        {
+          title: "景甜工作室声明回应",
+          url: "https://weibo.com/2/detail/2",
+          parentUrl: "https://x.com/a/status/1",
+          publishedAt: "2026-08-28T00:00:00.000Z",
+        },
+      ],
+      "孙宇晨 景甜",
+    );
+    const link = inferLinks(cards).find((l) => l.toId === cards[1].id);
+    expect(link?.confidence).toBe("verified");
   });
 });
 

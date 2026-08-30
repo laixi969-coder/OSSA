@@ -32,7 +32,18 @@ import {
   type TopicIdea,
 } from "./topic";
 import { clampFieldWant, mixFields, skipAsHomeHot, type FieldOrigin } from "./pool";
-import { hitMatchesQuery, layoutCards, queryKey, repairDigText, runDig, wallBounds, type Dig, type RawHit } from "./dig";
+import {
+  applyDisplayBalance,
+  hitMatchesQuery,
+  inferLinks,
+  layoutCards,
+  queryKey,
+  repairDigText,
+  runDig,
+  wallBounds,
+  type Dig,
+  type RawHit,
+} from "./dig";
 import { appendSnapshot, HOT_DIR, pruneOldSnapshots, searchArchive, type ArchiveHit } from "./hotsnap";
 
 const ROOT = join(import.meta.dir, "..");
@@ -769,6 +780,9 @@ async function socialHits(store: Store, query: string): Promise<RawHit[]> {
           sourceName: HOT_SOURCE[p.id] || it.source || p.id,
           summary: it.summary || (it.rank ? `热搜第 ${it.rank} 位` : ""),
           imageUrl: it.cover || "",
+          platform: p.id,
+          discoveredBy: "hot",
+          eventRole: "amplifier",
           hotEntry: true,
         });
       }
@@ -797,6 +811,9 @@ async function socialHits(store: Store, query: string): Promise<RawHit[]> {
         sourceName: HOT_SOURCE[a.platform] || a.platform,
         summary: hotSummary(a),
         imageUrl: "",
+        platform: a.platform,
+        discoveredBy: "hot",
+        eventRole: "amplifier",
         hotEntry: true,
       });
     }
@@ -1054,11 +1071,23 @@ async function handleAuth(req: Request, url: URL, ip: string) {
  * 返回 true 表示动了 store，需要写回。
  */
 function repairLayoutIfBroken(dig: Dig): boolean {
-  const before = JSON.stringify(dig.cards.map((c) => [c.id, c.x, c.y]));
+  const before = JSON.stringify({
+    cards: dig.cards.map((c) => [c.id, c.x, c.y, c.suppressed]),
+    cardCount: dig.cardCount,
+    links: dig.links,
+  });
+  dig.suppressedCount = applyDisplayBalance(dig.cards);
   layoutCards(dig.cards);
   dig.bounds = wallBounds(dig.cards);
+  dig.cardCount = dig.cards.filter((c) => !c.suppressed).length;
+  dig.links = inferLinks(dig.cards);
+  dig.linkCount = dig.links.length;
   const textDirty = repairDigText(dig);
-  const after = JSON.stringify(dig.cards.map((c) => [c.id, c.x, c.y]));
+  const after = JSON.stringify({
+    cards: dig.cards.map((c) => [c.id, c.x, c.y, c.suppressed]),
+    cardCount: dig.cardCount,
+    links: dig.links,
+  });
   return before !== after || textDirty;
 }
 
@@ -1464,7 +1493,8 @@ Sitemap: ${origin}/sitemap.xml
           lastSeenAt: now,
           isNew: true,
         });
-        dig.cardCount = dig.cards.length;
+        dig.cardCount = dig.cards.filter((c) => !c.suppressed).length;
+        dig.suppressedCount = dig.cards.filter((c) => c.suppressed).length;
         await writeStore(store);
         return json({ ok: true, dig });
       }

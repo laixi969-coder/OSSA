@@ -1191,11 +1191,11 @@ select[aria-invalid="true"] {
   border: 1px solid var(--color-ink-3);
   box-sizing: border-box;
 }
-.dig-chip .lg-news { border-radius: 1px; border-top: 3px double var(--color-ink-3); border-bottom-width: 1px; }
-.dig-chip .lg-post { width: 14px; height: 13px; border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; }
-.dig-chip .lg-visual { width: 15px; border-width: 2px; border-color: var(--color-ink-2); border-radius: 1px; }
-.dig-chip .lg-tag { border-style: dashed; border-radius: 2px; height: 13px; }
-.dig-chip .lg-note { border-radius: 0; transform: rotate(-8deg); background: var(--color-note); }
+.dig-chip .lg-news { background: var(--color-type-news-surface); border-color: var(--color-type-news-accent); border-radius: 1px; border-top: 3px double var(--color-type-news-accent); border-bottom-width: 1px; }
+.dig-chip .lg-post { width: 14px; height: 13px; background: var(--color-type-post-surface); border-color: var(--color-type-post-accent); border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; }
+.dig-chip .lg-visual { width: 15px; background: var(--color-type-visual-surface); border-width: 2px; border-color: var(--color-type-visual-accent); border-radius: 1px; }
+.dig-chip .lg-tag { background: var(--color-type-derivative-surface); border-color: var(--color-type-derivative-accent); border-style: dashed; border-radius: 2px; height: 13px; }
+.dig-chip .lg-note { border-color: var(--color-type-note-accent); border-radius: 0; transform: rotate(-8deg); background: var(--color-type-note-surface); }
 .dig-chip .lg-gap { border-style: dotted; background: transparent; }
 /* 线绳缩略 */
 .dig-chip .sw-str { width: 22px; height: 10px; flex: 0 0 auto; }
@@ -1315,6 +1315,7 @@ select[aria-invalid="true"] {
 .dig-lines .str.rel-repost { stroke: var(--color-rel-repost); }
 .dig-lines .str.rel-remix { stroke: var(--color-rel-remix); }
 .dig-lines .str.rel-business { stroke: var(--color-rel-business); }
+.dig-lines .str.conf-inferred { stroke-dasharray: 7 6; opacity: 0.34; }
 .dig-lines .str.is-on { opacity: 1; stroke-width: var(--string-w-on); }
 .dig-lines .str.is-dim { opacity: 0.07; }
 .dig-lines .str.is-hot { opacity: 1; stroke-width: 2.2; }
@@ -1366,12 +1367,12 @@ select[aria-invalid="true"] {
 }
 .ev-card:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; z-index: 9; }
 .ev-card.is-dragging { cursor: grabbing; z-index: 20; box-shadow: var(--shadow-lift); }
-.ev-card.kind-news { --pin-color: var(--color-rel-report); }
-.ev-card.kind-post { --pin-color: var(--color-rel-quote); }
+.ev-card.kind-news { --pin-color: var(--color-type-news-accent); }
+.ev-card.kind-post { --pin-color: var(--color-type-post-accent); }
 .ev-card.kind-meme,
-.ev-card.kind-image { --pin-color: var(--color-rel-repost); }
-.ev-card.kind-derivative { --pin-color: var(--color-rel-business); }
-.ev-card.kind-note { --pin-color: var(--color-warn); }
+.ev-card.kind-image { --pin-color: var(--color-type-visual-accent); }
+.ev-card.kind-derivative { --pin-color: var(--color-type-derivative-accent); }
+.ev-card.kind-note { --pin-color: var(--color-type-note-accent); }
 
 /* 图钉：圆头 + 高光 + 落影 */
 .ev-card .pin {
@@ -1526,10 +1527,10 @@ select[aria-invalid="true"] {
 .ev-card.kind-news {
   width: var(--ev-w-news);
   padding: 24px 16px 12px;
-  background: var(--color-clip);
+  background: var(--color-type-news-surface);
   border-radius: 2px;
-  border-top: 3px double var(--color-clip-rule);
-  box-shadow: var(--shadow-clip);
+  border-top: 3px double var(--color-type-news-accent);
+  box-shadow: inset 4px 0 0 var(--color-type-news-accent), var(--shadow-clip);
 }
 .ev-card.kind-news .ev-k {
   display: flex;
@@ -1554,7 +1555,9 @@ select[aria-invalid="true"] {
 .ev-card.kind-post {
   width: var(--ev-w-post);
   padding: 22px 14px 12px;
+  background: var(--color-type-post-surface);
   border-radius: 15px;
+  box-shadow: inset 4px 0 0 var(--color-type-post-accent), var(--shadow-tag);
 }
 .ev-card.kind-post .ev-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .ev-card.kind-post .ev-ava {
@@ -1590,9 +1593,9 @@ select[aria-invalid="true"] {
 .ev-card.kind-image {
   width: var(--ev-w-visual);
   padding: 13px 13px 14px;
-  background: var(--color-photo);
+  background: var(--color-type-visual-surface);
   border-radius: 3px;
-  box-shadow: var(--shadow-photo);
+  box-shadow: inset 4px 0 0 var(--color-type-visual-accent), var(--shadow-photo);
 }
 .ev-card.kind-meme { --tilt: -1.5deg; }
 .ev-card.kind-image { --tilt: 1.7deg; }
@@ -1620,9 +1623,10 @@ select[aria-invalid="true"] {
 .ev-card.kind-derivative {
   width: var(--ev-w-tag);
   padding: 28px 13px 12px;
-  background: var(--color-tag);
-  border: 1px dashed var(--color-rule);
+  background: var(--color-type-derivative-surface);
+  border: 1px dashed color-mix(in oklab, var(--color-type-derivative-accent) 55%, var(--color-rule));
   border-radius: 7px;
+  box-shadow: inset 4px 0 0 var(--color-type-derivative-accent), var(--shadow-tag);
 }
 .ev-card.kind-derivative::before {
   content: "";
@@ -1643,10 +1647,10 @@ select[aria-invalid="true"] {
 .ev-card.kind-note {
   width: var(--ev-w-note);
   padding: 24px 13px 16px;
-  background: var(--color-note);
+  background: var(--color-type-note-surface);
   border: 0;
   border-radius: 2px 2px 3px 2px;
-  box-shadow: var(--shadow-note);
+  box-shadow: inset 4px 0 0 var(--color-type-note-accent), var(--shadow-note);
   --tilt: -1.9deg;
 }
 .ev-card.kind-note::after {
@@ -1656,7 +1660,7 @@ select[aria-invalid="true"] {
   bottom: 0;
   width: 15px;
   height: 15px;
-  background: linear-gradient(135deg, transparent 50%, color-mix(in oklab, var(--color-note) 78%, var(--color-ink)) 50%);
+  background: linear-gradient(135deg, transparent 50%, color-mix(in oklab, var(--color-type-note-surface) 78%, var(--color-ink)) 50%);
   pointer-events: none;
 }
 .ev-card.kind-note h3 {

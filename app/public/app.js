@@ -1292,6 +1292,7 @@ async function renderGate() {
 const DIG_KIND = { news: "新闻简报", post: "社交帖子", meme: "表情包", image: "图片", note: "便签", derivative: "衍生品" };
 const DIG_KIND_ORDER = ["news", "post", "meme", "image", "derivative", "note"];
 const DIG_REL = { report: "报道", quote: "引用", repost: "转发", remix: "二创", business: "商业" };
+const DIG_ROLE = { seed: "源头", response: "回应", amplifier: "放大节点", discussion: "讨论", derivative: "二创", report: "核验报道" };
 const DIG_REL_ORDER = ["report", "quote", "repost", "remix", "business"];
 const DIG_LANE = { news: "news", post: "post", meme: "visual", image: "visual", derivative: "derivative", note: "note" };
 const LANE_LABEL = { news: "新闻简报", post: "社交帖子", visual: "表情包 / 图片", derivative: "衍生品", note: "便签" };
@@ -1313,16 +1314,23 @@ const LANE_GAP = {
   derivative: "衍生品这一轮没搜到",
 };
 const LANE_DOT = {
-  news: "var(--color-rel-report)",
-  post: "var(--color-rel-quote)",
-  visual: "var(--color-rel-repost)",
-  derivative: "var(--color-rel-business)",
-  note: "var(--color-warn)",
+  news: "var(--color-type-news-accent)",
+  post: "var(--color-type-post-accent)",
+  visual: "var(--color-type-visual-accent)",
+  derivative: "var(--color-type-derivative-accent)",
+  note: "var(--color-type-note-accent)",
 };
 
 const metrics = (kind) => CARD_METRICS[kind] || CARD_METRICS.news;
 const evTime = (c) => Date.parse(c.publishedAt) || Date.parse(c.firstSeenAt) || 0;
-const evDate = (c) => (c.publishedAt ? String(c.publishedAt).slice(0, 10) : "");
+const evDate = (c) => (c.publishedAt ? `${c.publishedAtApprox ? "约" : ""}${String(c.publishedAt).slice(0, 10)}` : "");
+const evEngagement = (c) => {
+  const n = Number(c.engagement || 0);
+  if (!n) return "";
+  if (n >= 100000000) return `${(n / 100000000).toFixed(n >= 1000000000 ? 0 : 1)}亿互动`;
+  if (n >= 10000) return `${(n / 10000).toFixed(n >= 100000 ? 0 : 1)}万互动`;
+  return `${n} 互动`;
+};
 
 /** 新闻转述的当事人发声——传播链里真正的发酵节点，脸上要看得出来。 */
 const isRelay = (c) => c.kind === "news" && (c.stance === "当事人回应" || c.stance === "单方陈述");
@@ -1415,7 +1423,7 @@ async function renderDig() {
   const kindOn = { news: true, post: true, meme: true, image: true, note: true, derivative: true };
   const relOn = { report: true, quote: true, repost: true, remix: true, business: true };
 
-  const allCards = () => dig?.cards || [];
+  const allCards = () => (dig?.cards || []).filter((c) => !c.suppressed);
   const visibleCards = () => allCards().filter((c) => kindOn[c.kind] !== false);
   const cardShown = (c) => Boolean(c) && kindOn[c.kind] !== false;
   const byIdMap = () => Object.fromEntries(allCards().map((c) => [c.id, c]));
@@ -1683,14 +1691,15 @@ async function renderDig() {
         const sag = Math.min(84, Math.max(22, dist * 0.17));
         const ey = p2.y + 14;
         const d = `M${p1.x} ${p1.y} C ${p1.x} ${Math.round(p1.y + sag)} ${p2.x} ${Math.round(ey + sag)} ${p2.x} ${Math.round(ey)}`;
-        const label = DIG_REL[ln.relation] || ln.relation;
+        const baseLabel = DIG_REL[ln.relation] || ln.relation;
+        const label = ln.confidence === "verified" ? baseLabel : `${baseLabel} · 推测`;
         const lw = label.length * 11 + 16;
         const cx = Math.round((p1.x + p2.x) / 2);
         const cy = Math.round((p1.y + ey) / 2 + sag * 0.75);
         const touching = selectedId && (ln.fromId === selectedId || ln.toId === selectedId);
         const state = !selectedId ? "" : touching ? " is-on" : " is-dim";
         const id = esc(ln.id);
-        return `<path class="str rel-${ln.relation}${state}" d="${d}" data-ln="${id}" marker-end="url(#ar-${ln.relation})" />
+        return `<path class="str rel-${ln.relation} conf-${ln.confidence || "inferred"}${state}" d="${d}" data-ln="${id}" marker-end="url(#ar-${ln.relation})" />
           <path class="hit" d="${d}" data-ln="${id}" />
           <g class="rel-chip${state}" data-ln="${id}"><rect x="${cx - lw / 2}" y="${cy - 9}" width="${lw}" height="18" rx="9" /><text x="${cx}" y="${cy + 4}" text-anchor="middle">${esc(label)}</text></g>`;
       })
@@ -1725,11 +1734,17 @@ async function renderDig() {
     }
     if (card.kind === "post") {
       const hot = Boolean(card.hotEntry);
+      const role = DIG_ROLE[card.eventRole] || "讨论";
+      const engagement = evEngagement(card);
+      const who = card.authorName || src || "未知来源";
+      const platform = card.platform && card.authorName ? src : "";
       return `<i class="pin" aria-hidden="true"></i>
         <div class="ev-head">
-          <span class="ev-ava" aria-hidden="true">${esc((src || "?").slice(0, 1))}</span>
-          <span class="ev-who"><b>${esc(src || "未知平台")}</b><span class="ev-k">${
-            hot ? `热搜词条${date ? " · " + esc(date) : " · 此刻"}` : `${esc(card.stance || "帖子")} · ${esc(date)}`
+          <span class="ev-ava" aria-hidden="true">${esc(who.slice(0, 1))}</span>
+          <span class="ev-who"><b>${esc(who)}</b><span class="ev-k">${
+            hot
+              ? `热搜词条 · ${esc(role)}${date ? " · " + esc(date) : " · 此刻"}`
+              : `${platform ? esc(platform) + " · " : ""}${esc(role)}${date ? " · " + esc(date) : ""}${engagement ? " · " + esc(engagement) : ""}`
           }</span></span>
         </div>
         <h3>${esc(card.title)}</h3>
@@ -1839,7 +1854,9 @@ async function renderDig() {
       const ln = links.find((l) => l.toId === id && ids.has(l.fromId));
       if (!ln) return "";
       const up = allCards().find((c) => c.id === ln.fromId);
-      return `<span class="rel">${esc(DIG_REL[ln.relation] || ln.relation)} · 来自 ${esc(up?.sourceName || up?.title || "上游")}</span>`;
+      return `<span class="rel">${esc(DIG_REL[ln.relation] || ln.relation)}${
+        ln.confidence === "verified" ? "" : "（推测）"
+      } · 来自 ${esc(up?.sourceName || up?.title || "上游")}</span>`;
     };
     const open = card.url
       ? `<a class="btn ghost" href="${esc(card.url)}" target="_blank" rel="noopener">打开原文</a>`
@@ -1852,7 +1869,11 @@ async function renderDig() {
         <button class="dock-x" type="button" id="dockClose" aria-label="关掉这条链">✕</button>
       </div>
       <h2 class="dock-title">${esc(card.title)}</h2>
-      <p class="dock-meta">${esc(card.sourceName || "来源未标")} · ${esc(evDate(card) || (card.hotEntry ? "此刻在榜" : "日期未标"))}${
+      <p class="dock-meta">${esc(card.authorName || card.sourceName || "来源未标")}${
+        card.authorName && card.sourceName ? " · " + esc(card.sourceName) : ""
+      }${card.eventRole ? " · " + esc(DIG_ROLE[card.eventRole] || card.eventRole) : ""}${
+        evEngagement(card) ? " · " + esc(evEngagement(card)) : ""
+      } · ${esc(evDate(card) || (card.hotEntry ? "此刻在榜" : "日期未标"))}${
         card.stale ? " · 这一轮没再搜到" : ""
       }</p>
       ${card.summary ? `<p class="dock-meta">${esc(card.summary)}</p>` : ""}
@@ -1911,6 +1932,7 @@ async function renderDig() {
     el.className = "dig-stats";
     el.innerHTML = [
       `<span><b>${dig.cardCount}</b> 张证据</span>`,
+      dig.suppressedCount ? `<span>另收起 <b>${dig.suppressedCount}</b> 张旧轮次证据</span>` : "",
       `<span><b>${shown}</b> 条线绳</span>`,
       span ? `<span>${esc(span)}</span>` : "",
       dig.newCount ? `<span>新到 <b>${dig.newCount}</b> 张</span>` : "",
@@ -2103,7 +2125,9 @@ async function renderDig() {
           const ln = links.find((l) => l.toId === c.id);
           const up = ln ? byId[ln.fromId] : null;
           const rel = up
-            ? `${esc(DIG_REL[ln.relation] || ln.relation)} · 来自 ${esc(up.sourceName || up.title)}`
+            ? `${esc(DIG_REL[ln.relation] || ln.relation)}${ln.confidence === "verified" ? "" : "（推测）"} · 来自 ${esc(
+                up.sourceName || up.title,
+              )}`
             : origin && c.id === origin.id
               ? "这一场最先出现的一条"
               : "还没连上别的卡";

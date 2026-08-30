@@ -1,6 +1,9 @@
 export type CardKind = "news" | "post" | "meme" | "image" | "note" | "derivative";
 export type Stance = "报道" | "单方陈述" | "当事人回应" | "二创";
 export type LinkRelation = "report" | "quote" | "repost" | "remix" | "business";
+export type EventRole = "seed" | "response" | "amplifier" | "discussion" | "derivative" | "report";
+export type RelationConfidence = "verified" | "inferred";
+export type DiscoverySource = "news" | "public_search" | "hot";
 
 export type EvidenceCard = {
   id: string;
@@ -13,12 +16,22 @@ export type EvidenceCard = {
   keywords: string[];
   imageUrl: string;
   stance: Stance;
+  platform?: string;
+  authorName?: string;
+  engagement?: number;
+  contentId?: string;
+  discoveredBy?: DiscoverySource;
+  eventRole?: EventRole;
+  parentUrl?: string;
+  publishedAtApprox?: boolean;
   x: number;
   y: number;
   firstSeenAt: string;
   lastSeenAt: string;
   isNew?: boolean;
   stale?: boolean;
+  /** 旧轮次超出当前证据配额的机器卡仍保存在 dig 中，但默认不铺在墙上。 */
+  suppressed?: boolean;
   /** 热榜词条，不是原帖：来自平台热搜快照，没有作者和发帖时间，页面按「此刻在榜」呈现。 */
   hotEntry?: boolean;
   /** 用户手拖过位置。整墙重排时钉住不动，其余卡绕开它。 */
@@ -30,6 +43,7 @@ export type EvidenceLink = {
   fromId: string;
   toId: string;
   relation: LinkRelation;
+  confidence?: RelationConfidence;
 };
 
 export type Dig = {
@@ -43,6 +57,7 @@ export type Dig = {
   cardCount: number;
   linkCount: number;
   newCount: number;
+  suppressedCount?: number;
   earliestAt: string;
   newestAt: string;
   cards: EvidenceCard[];
@@ -60,6 +75,15 @@ export type RawHit = {
   sourceName?: string;
   summary?: string;
   imageUrl?: string;
+  kind?: CardKind;
+  platform?: string;
+  authorName?: string;
+  engagement?: number;
+  contentId?: string;
+  discoveredBy?: DiscoverySource;
+  eventRole?: EventRole;
+  parentUrl?: string;
+  publishedAtApprox?: boolean;
   /** 热榜词条命中（社交热榜快照），非原帖。 */
   hotEntry?: boolean;
 };
@@ -274,6 +298,7 @@ export function parseTime(raw: string): string {
 }
 
 export function classifyKind(hit: RawHit): CardKind {
+  if (hit.kind) return hit.kind;
   const hay = `${hit.title} ${hit.url} ${hit.sourceName || ""}`.toLowerCase();
   if (/表情包|梗图|meme/.test(hay)) return "meme";
   if (/代币|二创|同人|恶搞|鬼畜|meme币|memecoin/.test(hay)) return "derivative";
@@ -289,6 +314,26 @@ export function classifyStance(hit: RawHit): Stance {
   if (/长文|自述|我的女友|纯属虚构|亲笔/.test(hay)) return "单方陈述";
   if (/表情包|二创|梗|代币|恶搞/.test(hay)) return "二创";
   return "报道";
+}
+
+function looksLikePrimaryPost(hit: RawHit): boolean {
+  const title = String(hit.title || "").replace(/^[\s"'“”‘’【】#]+/, "");
+  return hit.platform === "x" && Boolean(hit.contentId) && /^(我的|关于|致|声明|说明|道歉)/.test(title);
+}
+
+function inferEventRole(hit: RawHit, kind: CardKind, stance: Stance): EventRole {
+  if (hit.eventRole) return hit.eventRole;
+  if (kind === "meme" || kind === "derivative" || stance === "二创") return "derivative";
+  if (kind === "news") return "report";
+  if (hit.hotEntry || Number(hit.engagement || 0) >= 100_000) return "amplifier";
+  if (looksLikePrimaryPost(hit)) return "seed";
+  if (
+    stance === "当事人回应" &&
+    (hit.platform === "x" || hit.platform === "weibo") &&
+    /^[^：:]{2,10}(?:发文|回应|声明|道歉)/.test(String(hit.title || ""))
+  )
+    return "response";
+  return "discussion";
 }
 
 export function keywordsOf(title: string, query: string): string[] {
@@ -318,9 +363,11 @@ export function hitsToCards(hits: RawHit[], query: string, now = new Date().toIS
     // 先剥尾巴上的来源名，再定来源、关键词。来源名丢了就用域名兜底。
     const ts = splitTitleSource(hit.title);
     const title = ts.title.slice(0, 80);
+    const kind = classifyKind({ ...hit, title });
+    const stance = classifyStance({ ...hit, title });
     cards.push({
       id,
-      kind: classifyKind({ ...hit, title }),
+      kind,
       title,
       url,
       sourceName: hit.sourceName || ts.source || hostName(url) || "公开网页",
@@ -328,7 +375,15 @@ export function hitsToCards(hits: RawHit[], query: string, now = new Date().toIS
       summary: stripSourceTail(hit.summary || hit.title).slice(0, 160),
       keywords: keywordsOf(title, query),
       imageUrl: hit.imageUrl || "",
-      stance: classifyStance({ ...hit, title }),
+      stance,
+      platform: hit.platform,
+      authorName: hit.authorName,
+      engagement: hit.engagement,
+      contentId: hit.contentId,
+      discoveredBy: hit.discoveredBy,
+      eventRole: inferEventRole(hit, kind, stance),
+      parentUrl: hit.parentUrl ? canonicalUrl(hit.parentUrl) : undefined,
+      publishedAtApprox: hit.publishedAtApprox,
       x: 0,
       y: 0,
       firstSeenAt: now,
@@ -350,8 +405,9 @@ export function hitsToCards(hits: RawHit[], query: string, now = new Date().toIS
  */
 export function layoutCards(cards: EvidenceCard[]): EvidenceCard[] {
   const widthOf = (c: EvidenceCard) => (LANE[c.kind] || LANE.news).w;
-  const pinned = cards.filter((c) => c.pinned && (c.x || c.y));
-  const free = cards.filter((c) => !(c.pinned && (c.x || c.y))).sort((a, b) => timeOf(a) - timeOf(b));
+  const active = cards.filter((c) => !c.suppressed);
+  const pinned = active.filter((c) => c.pinned && (c.x || c.y));
+  const free = active.filter((c) => !(c.pinned && (c.x || c.y))).sort((a, b) => timeOf(a) - timeOf(b));
 
   // 1) 按道分组，道内按时间切行
   const lanes = new Map<string, EvidenceCard[]>();
@@ -432,6 +488,7 @@ export function wallBounds(cards: EvidenceCard[]): { w: number; h: number } {
   let w = WALL_X0 + WALL_SPAN + 120;
   let h = 320;
   for (const card of cards) {
+    if (card.suppressed) continue;
     const lane = LANE_OF[card.kind] || "news";
     w = Math.max(w, card.x + (LANE[card.kind] || LANE.news).w + 80);
     h = Math.max(h, card.y + (LANE_GEO[lane] || LANE_GEO.news).h + 80);
@@ -515,37 +572,78 @@ function sameStory(a: EvidenceCard, b: EvidenceCard): boolean {
  * 传播链，不是星形。from = 上游（更早）→ to = 下游（更晚），绳子方向就是传播方向。
  */
 export function inferLinks(cards: EvidenceCard[]): EvidenceLink[] {
-  const sorted = [...cards].filter((c) => c.kind !== "note").sort((a, b) => timeOf(a) - timeOf(b));
+  const sorted = [...cards]
+    .filter((c) => c.kind !== "note" && !c.suppressed)
+    .sort((a, b) => timeOf(a) - timeOf(b));
   if (sorted.length < 2) return [];
   const origin = sorted[0];
+  const byUrl = new Map(sorted.map((c) => [canonicalUrl(c.url), c]));
   const links: EvidenceLink[] = [];
   const seen = new Set<string>();
   const outCount = new Map<string, number>();
 
-  const add = (from: EvidenceCard, to: EvidenceCard, relation: LinkRelation) => {
+  const add = (from: EvidenceCard, to: EvidenceCard, relation: LinkRelation, confidence: RelationConfidence = "inferred") => {
     if (!from || !to || from.id === to.id) return;
     const key = `${from.id}>${to.id}`;
     if (seen.has(key)) return;
     if ((outCount.get(from.id) || 0) >= 6) return;
     seen.add(key);
     outCount.set(from.id, (outCount.get(from.id) || 0) + 1);
-    links.push({ id: `ln:${from.id}:${to.id}`, fromId: from.id, toId: to.id, relation });
+    links.push({ id: `ln:${from.id}:${to.id}`, fromId: from.id, toId: to.id, relation, confidence });
   };
 
   for (let i = 1; i < sorted.length; i++) {
     const card = sorted[i];
-    const upstream = pickUpstream(sorted.slice(0, i), card, origin, outCount);
+    const explicitParent = card.parentUrl ? byUrl.get(canonicalUrl(card.parentUrl)) : null;
+    const upstream = explicitParent || pickUpstream(sorted.slice(0, i), card, origin, outCount);
     if (!upstream || upstream.id === card.id) continue;
     let relation: LinkRelation = "report";
     if (card.stance === "当事人回应") relation = "quote";
     else if (card.kind === "meme" || card.kind === "derivative" || card.stance === "二创") relation = "remix";
     else if (BUSINESS_RE.test(`${card.title}${card.summary}`)) relation = "business";
     else if (sameStory(card, upstream)) relation = "repost";
-    add(upstream, card, relation);
+    add(upstream, card, relation, explicitParent ? "verified" : "inferred");
     // 上游不是源头时再补一条到源头，让图是网不是纯树。
-    if (upstream.id !== origin.id) add(origin, card, "report");
+    if (upstream.id !== origin.id) add(origin, card, "report", "inferred");
   }
   return links.slice(0, 60);
+}
+
+function keepScore(card: EvidenceCard): number {
+  let score = card.pinned ? 1_000_000 : 0;
+  if (!card.stale) score += 100_000;
+  if (card.eventRole === "seed") score += 50_000;
+  else if (card.eventRole === "response") score += 40_000;
+  else if (card.eventRole === "amplifier") score += 30_000;
+  score += Math.min(Number(card.engagement || 0), 20_000);
+  score += Math.floor(timeOf(card) / 86_400_000);
+  return score;
+}
+
+/**
+ * 历史 dig 可能已经攒下五六十张新闻。证据不删除：超出配额的机器卡只默认收起；
+ * 用户拖过的卡和便签永不收起。每次更新都会重新竞争配额，重新搜到的卡优先回来。
+ */
+export function applyDisplayBalance(cards: EvidenceCard[]): number {
+  cards.forEach((card) => {
+    card.suppressed = false;
+  });
+  const suppressAfter = (rows: EvidenceCard[], cap: number) => {
+    const ranked = [...rows].sort((a, b) => keepScore(b) - keepScore(a));
+    let kept = 0;
+    for (const card of ranked) {
+      if (card.pinned) continue;
+      if (kept < cap) {
+        kept += 1;
+        continue;
+      }
+      card.suppressed = true;
+    }
+  };
+  suppressAfter(cards.filter((c) => c.kind === "post"), 16);
+  suppressAfter(cards.filter((c) => c.kind === "news"), 12);
+  suppressAfter(cards.filter((c) => ["meme", "image", "derivative"].includes(c.kind)), 8);
+  return cards.filter((c) => c.suppressed).length;
 }
 
 export function mergeDig(prev: Dig | null | undefined, incoming: EvidenceCard[], now = new Date().toISOString()): {
@@ -571,6 +669,14 @@ export function mergeDig(prev: Dig | null | undefined, incoming: EvidenceCard[],
         stale: false,
         summary: card.summary || old.summary,
         imageUrl: card.imageUrl || old.imageUrl,
+        platform: card.platform || old.platform,
+        authorName: card.authorName || old.authorName,
+        engagement: Math.max(Number(card.engagement || 0), Number(old.engagement || 0)) || undefined,
+        contentId: card.contentId || old.contentId,
+        discoveredBy: card.discoveredBy || old.discoveredBy,
+        eventRole: card.eventRole || old.eventRole,
+        parentUrl: card.parentUrl || old.parentUrl,
+        publishedAtApprox: card.publishedAtApprox ?? old.publishedAtApprox,
       });
     } else {
       newCount += 1;
@@ -581,11 +687,13 @@ export function mergeDig(prev: Dig | null | undefined, incoming: EvidenceCard[],
     if (seen.has(old.id)) continue;
     cards.push({ ...old, isNew: false, stale: old.kind !== "note" });
   }
+  applyDisplayBalance(cards);
   return { cards: layoutCards(cards), newCount };
 }
 
 export function summarizeDig(query: string, cards: EvidenceCard[], links: EvidenceLink[], extra: Partial<Dig> = {}): Dig {
-  const dated = cards.map((c) => c.publishedAt).filter(Boolean).sort();
+  const active = cards.filter((c) => !c.suppressed);
+  const dated = active.map((c) => c.publishedAt).filter(Boolean).sort();
   return {
     id: extra.id || `dig:${Date.now()}`,
     query: normalizeQuery(query),
@@ -594,9 +702,10 @@ export function summarizeDig(query: string, cards: EvidenceCard[], links: Eviden
     startedAt: extra.startedAt || new Date().toISOString(),
     finishedAt: extra.finishedAt || new Date().toISOString(),
     fetchedAt: extra.fetchedAt || new Date().toISOString(),
-    cardCount: cards.length,
+    cardCount: active.length,
     linkCount: links.length,
-    newCount: extra.newCount || cards.filter((c) => c.isNew).length,
+    newCount: extra.newCount || active.filter((c) => c.isNew).length,
+    suppressedCount: cards.length - active.length,
     earliestAt: dated[0] || "",
     newestAt: dated[dated.length - 1] || "",
     cards,
@@ -618,7 +727,205 @@ export function hitMatchesQuery(title: string, query: string): boolean {
   const tokens = queryTokens(query);
   if (!tokens.length) return false;
   const hay = title.toLowerCase();
-  return tokens.some((t) => hay.includes(t.toLowerCase()));
+  return tokens.every((t) => hay.includes(t.toLowerCase()));
+}
+
+const PUBLIC_SEARCH_ENDPOINT = process.env.OSSA_PUBLIC_SEARCH_ENDPOINT || "https://api.anysearch.com/mcp";
+
+const SOCIAL_SITES = [
+  { id: "x", name: "X", query: "site:x.com", hosts: /(^|\.)x\.com$/i },
+  { id: "weibo", name: "微博", query: "site:weibo.com", hosts: /(^|\.)(weibo\.com|weibo\.cn)$/i },
+  { id: "zhihu", name: "知乎", query: "site:zhihu.com", hosts: /(^|\.)zhihu\.com$/i },
+  { id: "douyin", name: "抖音", query: "site:douyin.com/video", hosts: /(^|\.)douyin\.com$/i },
+  { id: "bilibili", name: "B站", query: "site:bilibili.com/video", hosts: /(^|\.)bilibili\.com$/i },
+  { id: "xiaohongshu", name: "小红书", query: "site:xiaohongshu.com", hosts: /(^|\.)xiaohongshu\.com$/i },
+] as const;
+
+function socialSite(url: string): (typeof SOCIAL_SITES)[number] | null {
+  try {
+    const host = new URL(url).hostname;
+    return SOCIAL_SITES.find((site) => site.hosts.test(host)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function contentIdOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return (
+      u.pathname.match(/\/(?:status|detail|video|question|answer|explore)\/([A-Za-z0-9_-]+)/i)?.[1] ||
+      u.searchParams.get("id") ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+function publishedFromSnippet(summary: string, now: Date): { publishedAt: string; approx: boolean } {
+  const compact = summary.match(/(?:于|date:\s*)(20\d{2})[-/]?(\d{2})[-/]?(\d{2})(?:发布)?/i);
+  if (compact) {
+    const d = new Date(Date.UTC(Number(compact[1]), Number(compact[2]) - 1, Number(compact[3]), 12));
+    return { publishedAt: d.toISOString(), approx: false };
+  }
+  const rel = summary.match(/date:\s*(\d+)\s*(minute|hour|day)s?\s+ago/i);
+  if (rel) {
+    const unit = rel[2].toLowerCase();
+    const ms = unit === "minute" ? 60_000 : unit === "hour" ? 3_600_000 : 86_400_000;
+    return { publishedAt: new Date(now.getTime() - Number(rel[1]) * ms).toISOString(), approx: true };
+  }
+  return { publishedAt: "", approx: false };
+}
+
+function engagementFromSnippet(summary: string): number | undefined {
+  const values: number[] = [];
+  for (const m of summary.matchAll(/(\d+(?:\.\d+)?)\s*(万|亿)?\s*(?:个)?(?:喜欢|点赞|赞|转发|评论|views?)/gi)) {
+    const factor = m[2] === "亿" ? 100_000_000 : m[2] === "万" ? 10_000 : 1;
+    values.push(Math.round(Number(m[1]) * factor));
+  }
+  return values.length ? Math.max(...values) : undefined;
+}
+
+function authorFromSnippet(summary: string): string | undefined {
+  const m = summary.match(/[-–—]\s*([^\s，。；]{1,24})于20\d{6}发布/);
+  return m?.[1]?.trim() || undefined;
+}
+
+/** AnySearch 的 MCP 文本结果是稳定 Markdown；这里只取编号结果块，不碰回答性文本。 */
+export function parsePublicSearchResults(markdown: string, now = new Date()): RawHit[] {
+  const blocks = String(markdown || "").split(/^###\s+\d+\.\s+/m).slice(1);
+  const out: RawHit[] = [];
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const title = String(lines.shift() || "").trim();
+    const url = block.match(/- \*\*URL\*\*:\s*(https?:\/\/\S+)/i)?.[1]?.trim() || "";
+    const site = socialSite(url);
+    if (!title || !url || !site) continue;
+    const summary = lines
+      .filter((line) => !/^\s*- \*\*URL\*\*:/.test(line) && !/^\s*##/.test(line))
+      .join(" ")
+      .replace(/^\s*-\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const published = publishedFromSnippet(summary, now);
+    const creative = /表情包|梗图|meme|二创|同人|恶搞|鬼畜|短剧/.test(`${title} ${summary}`);
+    const hotEntry = /\/a\/hot\//.test(url);
+    out.push({
+      title,
+      url,
+      summary: summary.replace(/\s*date:\s*\d+\s*(?:minute|hour|day)s?\s+ago\s*$/i, "").trim(),
+      sourceName: hotEntry ? `${site.name}热搜` : site.name,
+      platform: site.id,
+      contentId: contentIdOf(url),
+      authorName: authorFromSnippet(summary),
+      engagement: engagementFromSnippet(summary),
+      publishedAt: published.publishedAt,
+      publishedAtApprox: published.approx || undefined,
+      discoveredBy: "public_search",
+      kind: creative ? (/表情包|梗图|meme/i.test(`${title} ${summary}`) ? "meme" : "derivative") : "post",
+      eventRole: hotEntry ? "amplifier" : undefined,
+      hotEntry: hotEntry || undefined,
+    });
+  }
+  return out;
+}
+
+export function discoverEventPhrases(news: RawHit[]): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const hit of news) {
+    for (const m of `${hit.title} ${hit.summary || ""}`.matchAll(/[《“"]([^》”"]{4,28})[》”"]/g)) {
+      const phrase = m[1].replace(/\s+/g, " ").trim();
+      const key = phrase.toLowerCase();
+      if (!phrase || seen.has(key)) continue;
+      seen.add(key);
+      found.push(phrase);
+      if (found.length >= 2) return found;
+    }
+  }
+  return found;
+}
+
+export function publicSearchQueries(query: string, phrases: string[] = [], includeBase = true): string[] {
+  const q = normalizeQuery(query);
+  const out = includeBase ? SOCIAL_SITES.map((site) => `${site.query} ${q}`) : [];
+  for (const phrase of phrases.slice(0, 2)) {
+    out.push(`site:x.com "${phrase}"`, `site:weibo.com "${phrase}"`);
+  }
+  return [...new Set(out)].slice(0, 10);
+}
+
+async function callPublicSearch(queries: string[]): Promise<{ hits: RawHit[]; ok: boolean }> {
+  if (!queries.length) return { hits: [], ok: true };
+  const chunks: string[][] = [];
+  for (let i = 0; i < queries.length; i += 5) chunks.push(queries.slice(i, i + 5));
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 28000);
+  try {
+    const pages = await Promise.all(
+      chunks.map(async (chunk, i) => {
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (process.env.ANYSEARCH_API_KEY) headers.Authorization = `Bearer ${process.env.ANYSEARCH_API_KEY}`;
+        const res = await fetch(PUBLIC_SEARCH_ENDPOINT, {
+          method: "POST",
+          signal: ctrl.signal,
+          headers,
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: i + 1,
+            method: "tools/call",
+            params: {
+              name: "batch_search",
+              arguments: { queries: chunk.map((q) => ({ query: q, max_results: 6, content_types: ["web"] })) },
+            },
+          }),
+        });
+        if (!res.ok) throw new Error(`public search ${res.status}`);
+        const body = (await res.json()) as {
+          error?: unknown;
+          result?: { content?: Array<{ type?: string; text?: string }> };
+        };
+        if (body.error) throw new Error("public search rpc error");
+        return (body.result?.content || []).filter((x) => x.type === "text").map((x) => x.text || "").join("\n");
+      }),
+    );
+    return { hits: pages.flatMap((page) => parsePublicSearchResults(page)), ok: true };
+  } catch {
+    return { hits: [], ok: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function hitScore(hit: RawHit, query: string): number {
+  const hay = `${hit.title} ${hit.summary || ""}`.toLowerCase();
+  const matched = queryTokens(query).filter((t) => hay.includes(t.toLowerCase())).length;
+  const stance = classifyStance(hit);
+  let score = matched * 8 + (hit.contentId ? 4 : 0) + (hit.publishedAt ? 2 : 0);
+  const role = inferEventRole(hit, classifyKind(hit), stance);
+  if (role === "seed") score += 24;
+  else if (role === "response") score += 16;
+  else if (role === "amplifier") score += 12;
+  if (hit.hotEntry) score += 6;
+  if (hit.engagement) score += Math.min(Math.log10(hit.engagement + 1) * 2, 12);
+  return score;
+}
+
+/** 新闻最多 12、社交最多 16、二创/图片最多 8；某类不足就空着，不让新闻补满。 */
+export function selectBalancedHits(hits: RawHit[], query: string): RawHit[] {
+  const used = new Set<string>();
+  const unique = hits.filter((hit) => {
+    const key = canonicalUrl(hit.url) || `${hit.platform || ""}:${hit.title}`;
+    if (!key || used.has(key)) return false;
+    used.add(key);
+    return true;
+  });
+  const sorted = (rows: RawHit[]) => rows.sort((a, b) => hitScore(b, query) - hitScore(a, query));
+  const posts = sorted(unique.filter((hit) => classifyKind(hit) === "post")).slice(0, 16);
+  const news = sorted(unique.filter((hit) => classifyKind(hit) === "news")).slice(0, 12);
+  const creative = sorted(unique.filter((hit) => !["post", "news", "note"].includes(classifyKind(hit)))).slice(0, 8);
+  return [...posts, ...news, ...creative].slice(0, 36);
 }
 
 async function fetchText(url: string, timeout = 12000): Promise<string> {
@@ -644,30 +951,28 @@ async function fetchText(url: string, timeout = 12000): Promise<string> {
 export async function searchGoogleNews(query: string): Promise<RawHit[]> {
   const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans`;
   const xml = await fetchText(url);
-  return parseRssItems(xml);
+  return parseRssItems(xml).map((hit) => ({ ...hit, discoveredBy: "news" as const }));
 }
 
 export async function searchBingNews(query: string): Promise<RawHit[]> {
   const url = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=rss&setlang=zh-CN`;
   const xml = await fetchText(url);
-  return parseRssItems(xml);
+  return parseRssItems(xml).map((hit) => ({ ...hit, discoveredBy: "news" as const }));
 }
 
 export async function collectHits(query: string, extras: RawHit[] = []): Promise<{ hits: RawHit[]; gaps: string[] }> {
   const gaps: string[] = [];
-  const [google, bing] = await Promise.all([searchGoogleNews(query), searchBingNews(query)]);
+  const baseSocial = callPublicSearch(publicSearchQueries(query));
+  const [google, bing, social] = await Promise.all([searchGoogleNews(query), searchBingNews(query), baseSocial]);
   if (!google.length) gaps.push("新闻检索有一路没回来");
-  // extras（热榜词条）排在最前：它们本来就稀少，截断 36 张时不能先砍它们。
-  const hits = [...extras, ...google, ...bing];
-  const used = new Set<string>();
-  const unique: RawHit[] = [];
-  for (const hit of hits) {
-    const key = canonicalUrl(hit.url) || hit.title;
-    if (!key || used.has(key)) continue;
-    used.add(key);
-    unique.push(hit);
-  }
-  return { hits: unique.slice(0, 36), gaps };
+  if (!social.ok) gaps.push("公开社交网页检索暂时没回来");
+  const phrases = discoverEventPhrases([...google, ...bing]);
+  const expanded = phrases.length
+    ? await callPublicSearch(publicSearchQueries(query, phrases, false))
+    : { hits: [] as RawHit[], ok: true };
+  if (!expanded.ok && social.ok) gaps.push("事件别名的社交补搜暂时没回来");
+  const hot = extras.map((hit) => ({ ...hit, discoveredBy: hit.discoveredBy || ("hot" as const) }));
+  return { hits: selectBalancedHits([...hot, ...social.hits, ...expanded.hits, ...google, ...bing], query), gaps };
 }
 
 export async function runDig(query: string, prev?: Dig | null, extras: RawHit[] = []): Promise<Dig> {
@@ -685,8 +990,9 @@ export async function runDig(query: string, prev?: Dig | null, extras: RawHit[] 
   const incoming = hitsToCards(hits, q, startedAt);
   const merged = mergeDig(prev, incoming, startedAt);
   const links = inferLinks(merged.cards);
+  const activeCards = merged.cards.filter((c) => !c.suppressed);
   const missingKinds = (["news", "post", "meme", "derivative"] as CardKind[]).filter(
-    (k) => !merged.cards.some((c) => c.kind === k),
+    (k) => !activeCards.some((c) => c.kind === k),
   );
   const kindGaps = missingKinds.map((k) => {
     if (k === "news") return "这一轮新闻不够";
@@ -696,10 +1002,10 @@ export async function runDig(query: string, prev?: Dig | null, extras: RawHit[] 
   });
   return summarizeDig(q, merged.cards, links, {
     id: prev?.id || `dig:${Date.now()}`,
-    status: merged.cards.length ? "done" : "failed",
+    status: activeCards.length ? "done" : "failed",
     startedAt,
     newCount: prev ? merged.newCount : merged.cards.length,
-    error: merged.cards.length ? "" : "公开源这一轮没搜到。换个更具体的事件名再试。",
+    error: activeCards.length ? "" : "公开源这一轮没搜到。换个更具体的事件名再试。",
     gaps: [...gaps, ...kindGaps],
   });
 }

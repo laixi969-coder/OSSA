@@ -38,6 +38,18 @@
   --color-axis: oklch(99% 0.003 250 / 0.72);
   --color-label: oklch(99% 0.003 250 / 0.9);
 
+  /* 事件地图 · 卡片种类。只表达“是什么”，不要复用来表达线绳关系。 */
+  --color-type-news-accent: oklch(50% 0.13 250);
+  --color-type-post-accent: oklch(49% 0.1 160);
+  --color-type-visual-accent: oklch(59% 0.13 75);
+  --color-type-derivative-accent: oklch(51% 0.11 305);
+  --color-type-note-accent: oklch(58% 0.12 75);
+  --color-type-news-surface: color-mix(in oklab, var(--color-card) 89%, var(--color-type-news-accent) 11%);
+  --color-type-post-surface: color-mix(in oklab, var(--color-card) 89%, var(--color-type-post-accent) 11%);
+  --color-type-visual-surface: color-mix(in oklab, var(--color-card) 87%, var(--color-type-visual-accent) 13%);
+  --color-type-derivative-surface: color-mix(in oklab, var(--color-card) 89%, var(--color-type-derivative-accent) 11%);
+  --color-type-note-surface: color-mix(in oklab, var(--color-card) 82%, var(--color-type-note-accent) 18%);
+
   /* 事件地图 · 证据材质（全部由基色派生，深色模式自动跟随） */
   --color-clip: color-mix(in oklab, var(--color-card) 90%, var(--color-ink) 5%);
   --color-clip-rule: color-mix(in oklab, var(--color-ink) 26%, transparent);
@@ -104,4 +116,14 @@
   --radius-pill: 999px;
   --radius-input: 12px;
   --rule: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-type-news-accent: oklch(73% 0.11 250);
+    --color-type-post-accent: oklch(72% 0.1 160);
+    --color-type-visual-accent: oklch(78% 0.12 75);
+    --color-type-derivative-accent: oklch(74% 0.1 305);
+    --color-type-note-accent: oklch(78% 0.11 75);
+  }
 }
